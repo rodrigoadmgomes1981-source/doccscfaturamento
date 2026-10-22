@@ -86,7 +86,15 @@ O workflow `.github/workflows/ci.yml` roda os testes e o build a cada push. Para
    - `VITE_SUPABASE_ANON_KEY` = anon public key
 3. Clique em **Deploy**. A cada push na `main`, a Vercel publica de novo.
 
-Alternativa: a integração *Supabase* do Marketplace da Vercel cria as variáveis. Nesse caso, confira se os nomes começam com `VITE_`.
+Também são aceitos os nomes criados pela integração *Supabase* do Marketplace da Vercel (`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_ANON_KEY`).
+
+**Se aparecer "Configuração pendente":** as variáveis não estavam disponíveis no build. Os valores do Supabase são gravados no site no momento do build. Para resolver:
+
+1. Cadastre as variáveis marcando **Production**.
+2. Vá em **Deployments › ⋯ › Redeploy**.
+3. Confira no log do build as linhas `[faturamento] Supabase URL: ok` e `[faturamento] Supabase key: ok`.
+
+A chave *service_role* é recusada de propósito: use sempre a *anon public*.
 
 ### 4. Primeiro acesso
 

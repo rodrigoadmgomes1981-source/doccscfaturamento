@@ -1,7 +1,7 @@
 import './styles.css';
 import * as XLSX from 'xlsx';
 import Chart from 'chart.js/auto';
-import { sb, configurado, platform } from './platform/client.js';
+import { sb, configurado, platform, diagnostico } from './platform/client.js';
 
 window.XLSX = XLSX;
 window.Chart = Chart;
@@ -68,7 +68,22 @@ async function iniciar() {
 
 async function start() {
   if (!configurado) {
-    app.innerHTML = '<div class="login"><div class="login-card"><h1>Configuração pendente</h1><p>Defina <code>VITE_SUPABASE_URL</code> e <code>VITE_SUPABASE_ANON_KEY</code> (arquivo <code>.env</code> local ou variáveis de ambiente na Vercel) e publique novamente.</p></div></div>';
+    const d = diagnostico || {};
+    const st = (v) => v === 'ok' ? '<span class="tag">ok</span>' : v === 'secreta' ? '<span class="tag bad">chave secreta recusada</span>' : v === 'invalida' ? '<span class="tag bad">formato inválido</span>' : '<span class="tag bad">não encontrada</span>';
+    app.innerHTML = `<div class="login"><div class="login-card" style="max-width:560px">
+      <div><div class="eyebrow">Faturamento Médico</div><h1>Configuração pendente</h1>
+      <p class="muted">Este site foi publicado sem os dados de conexão com o Supabase. Eles são gravados no momento do build, então é preciso cadastrá-los e publicar de novo.</p></div>
+      <div class="tbl"><table><tbody>
+        <tr><td>URL do projeto</td><td>${st(d.url)}</td><td class="mono">VITE_SUPABASE_URL</td></tr>
+        <tr><td>Chave pública (anon)</td><td>${st(d.key)}</td><td class="mono">VITE_SUPABASE_ANON_KEY</td></tr>
+      </tbody></table></div>
+      <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
+        <li>No Supabase, abra <b>Project Settings › API</b> e copie a <b>Project URL</b> e a chave <b>anon public</b>. Não use a <i>service_role</i>.</li>
+        <li>Na Vercel, abra o projeto › <b>Settings › Environment Variables</b> e crie as duas variáveis acima, marcando <b>Production</b>, <b>Preview</b> e <b>Development</b>.</li>
+        <li>Vá em <b>Deployments</b>, clique em <b>⋯</b> no último deploy › <b>Redeploy</b>. Variáveis novas só valem em um deploy novo.</li>
+      </ol>
+      <p class="muted" style="font-size:.8rem">Também são aceitos os nomes criados pela integração Supabase da Vercel (NEXT_PUBLIC_SUPABASE_URL, SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_ANON_KEY). Build: ${esc(d.build || '—')}${d.vercelEnv ? ' · ambiente ' + esc(d.vercelEnv) : ''}.</p>
+    </div></div>`;
     return;
   }
   sb.auth.onAuthStateChange((ev) => {
