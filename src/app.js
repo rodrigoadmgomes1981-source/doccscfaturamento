@@ -119,7 +119,7 @@ function viewApp(){
   const me=S.me;
   return '<div class="app"><aside class="side"><div class="brand"><b>Faturamento Médico</b><span>Fechamento mensal</span></div>'+
     '<nav class="nav">'+vis.map(n=>'<button data-act="nav" data-v="'+n[0]+'" aria-current="'+(curNav===n[0])+'">'+ico(n[0])+'<span>'+n[1]+'</span></button>').join('')+'</nav>'+
-    (me? '<div class="who"><img src="'+esc(me.avatarUrl)+'" alt=""><div><b>'+esc(me.name||'Você')+'</b><small>'+esc(S.owner?'Administrador geral':(PERFIS[(meuUsuario()||{}).perfil]||{}).label||'Sem perfil')+'</small></div>'+(window.__logout?'<button class="btn sm ghost" data-act="logout" style="color:var(--side-fg);margin-left:auto">Sair</button>':'')+'</div>':'')+
+    (me? '<div class="who"><img src="'+esc(me.avatarUrl)+'" alt=""><div><b>'+esc(me.name||'Você')+'</b><small>'+esc(S.owner?'Administrador geral':(PERFIS[(meuUsuario()||{}).perfil]||{}).label||'Sem perfil')+'</small></div>'+'</div>'+(window.__logout?'<div class="who-acts">'+(window.__trocarSenha?'<button class="btn sm ghost" data-act="trocarSenha">Trocar senha</button>':'')+'<button class="btn sm ghost" data-act="logout">Sair</button></div>':''):'')+
     '</aside><main class="main">'+viewMain()+'</main></div>'+
     (S.modal? '<div class="overlay" data-act="ovl"><div class="modal" role="dialog" aria-modal="true">'+viewModal()+'</div></div>':'')+
     (S.toast? '<div class="toast '+(S.toast.kind||'')+'" role="status">'+esc(S.toast.msg)+'</div>':'');
@@ -472,13 +472,14 @@ function viewMedicos(){
 /* ================= ADMIN ================= */
 function viewAdmin(){
   let out='<div class="head"><div><div class="eyebrow">Administração</div><h1>Usuários e permissões</h1><p>Quem pode importar, conferir, aprovar, emitir NF e gerar a folha. Administradores gerais (tabela app_admins) têm acesso total.</p></div></div>';
-  out+='<div class="card"><h2>Adicionar usuário</h2><div class="dd" style="max-width:460px"><input type="search" id="uSearch" placeholder="Digite o nome ou e-mail de um colega" data-inp="uSearch" autocomplete="off">'+
-    (S.userHits.length?'<ul>'+S.userHits.map(h=>'<li><button data-act="addUser" data-id="'+esc(h.id)+'"><img class="av" src="'+esc(h.avatarUrl)+'" alt=""><span>'+esc(h.name)+(h.email?' <span class="muted">'+esc(h.email)+'</span>':'')+'</span></button></li>').join('')+'</ul>':'')+'</div><p class="muted">A pessoa precisa criar a conta na tela de login antes; depois disso ela aparece nesta busca.</p></div>';
+  if(window.__contas) out+='<div class="card"><h2>Criar conta de acesso</h2><p class="muted">O sistema gera uma senha temporária para você repassar à pessoa. No primeiro acesso ela define a própria senha.</p><form class="fields" id="fConta" data-sub="criarConta" novalidate><label class="f">Nome completo<input type="text" id="ncNome" autocomplete="off"></label><label class="f">E-mail<input type="email" id="ncEmail" autocomplete="off"></label><label class="f">Perfil<select id="ncPerfil">'+Object.entries(PERFIS).map(([k,v])=>'<option value="'+k+'"'+(k==='consulta'?' selected':'')+'>'+v.label+'</option>').join('')+'</select></label><div class="f" style="justify-content:flex-end"><button class="btn pri" type="submit"'+(S.busy?' disabled':'')+'>'+(S.busy?'Criando…':'Criar conta')+'</button></div></form></div>';
+  out+='<div class="card"><h2>'+(window.__contas?'Incluir conta já existente':'Adicionar usuário')+'</h2><div class="dd" style="max-width:460px"><input type="search" id="uSearch" placeholder="Digite o nome ou e-mail de um colega" data-inp="uSearch" autocomplete="off">'+
+    (S.userHits.length?'<ul>'+S.userHits.map(h=>'<li><button data-act="addUser" data-id="'+esc(h.id)+'"><img class="av" src="'+esc(h.avatarUrl)+'" alt=""><span>'+esc(h.name)+(h.email?' <span class="muted">'+esc(h.email)+'</span>':'')+'</span></button></li>').join('')+'</ul>':'')+'</div><p class="muted">'+(window.__contas?'Para quem já tem conta e foi removido da lista abaixo.':'A pessoa precisa criar a conta na tela de login antes; depois disso ela aparece nesta busca.')+'</p></div>';
   const us=S.usuarios.slice().sort((a,b)=>nomeDe(a.id).localeCompare(nomeDe(b.id),'pt-BR'));
   out+='<div class="card"><h2>Usuários ('+us.length+')</h2>'+(us.length?'':'<p class="muted">Nenhum usuário além do proprietário.</p>')+us.map(u=>{ const p=S.prof[u.id]||{};
     return '<div style="border-top:1px solid var(--line);padding:14px 0;display:flex;flex-direction:column;gap:10px"><div class="row"><img class="av" src="'+esc(p.avatarUrl||'')+'" alt=""><div class="grow"><b>'+esc(p.name||'Usuário')+'</b>'+(p.email?' <span class="muted">'+esc(p.email)+'</span>':'')+'<div class="muted" style="font-size:.8rem">Incluído em '+fDT(u.criadoEm)+' por '+esc(nomeDe(u.criadoPor))+'</div></div>'+
       '<label class="f">Perfil<select id="up_'+safeKey(u.id)+'" data-chg="uPerfil" data-id="'+esc(u.id)+'">'+Object.entries(PERFIS).map(([k,v])=>'<option value="'+k+'"'+(u.perfil===k?' selected':'')+'>'+v.label+'</option>').join('')+'<option value="custom"'+(u.perfil==='custom'?' selected':'')+'>Personalizado</option></select></label>'+
-      '<label class="f chk"><input type="checkbox" id="ua_'+safeKey(u.id)+'" data-chg="uAtivo" data-id="'+esc(u.id)+'"'+(u.ativo!==false?' checked':'')+'> Ativo</label><button class="btn ghost sm" data-act="rmUser" data-id="'+esc(u.id)+'">Remover</button></div>'+
+      '<label class="f chk"><input type="checkbox" id="ua_'+safeKey(u.id)+'" data-chg="uAtivo" data-id="'+esc(u.id)+'"'+(u.ativo!==false?' checked':'')+'> Ativo</label>'+(window.__contas&&u.id!==S.uid?'<button class="btn ghost sm" data-act="resetSenha" data-id="'+esc(u.id)+'">Redefinir senha</button>':'')+'<button class="btn ghost sm" data-act="rmUser" data-id="'+esc(u.id)+'">Remover</button></div>'+
       '<div class="perm">'+PERMS.map(([k,l])=>'<label class="f chk"><input type="checkbox" id="pm_'+safeKey(u.id)+'_'+k+'" data-chg="uPerm" data-id="'+esc(u.id)+'" data-p="'+k+'"'+(u.perms&&u.perms[k]?' checked':'')+'> '+l+'</label>').join('')+'</div></div>';}).join('')+'</div>';
   const emp=(S.config&&S.config.empresas)||[]; const nat=Object.assign({},NATUREZAS_PADRAO,(S.config&&S.config.naturezas)||{});
   out+='<div class="grid g2"><div class="card"><div class="row"><h2 class="grow">Empresas pagadoras</h2><button class="btn sm" data-act="addEmp">Adicionar</button></div><p class="muted">Tabela usada para o “Cod Empresa Pagadora” da importação no Sankhya.</p><div class="tbl" style="max-height:420px;overflow:auto"><table><thead><tr><th>Sigla</th><th>Razão abreviada</th><th class="n">Código</th><th></th></tr></thead><tbody>'+
@@ -508,6 +509,9 @@ function viewModal(){
     const ok=p&&m.ct&&m.comp&&!(m.ct&&m.comp&&fechById(m.ct+'_'+m.comp.replace('-',''))&&lock(fechById(m.ct+'_'+m.comp.replace('-',''))));
     out+='<div class="row"><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button><button class="btn pri" data-act="criarFech"'+(ok&&!S.busy?'':' disabled')+'>'+(S.busy?'Importando…':'Importar e iniciar fechamento')+'</button></div>';
     return out;
+  }
+  if(m.type==='senha'){
+    return '<h2>'+esc(m.title)+'</h2><p>Repasse estes dados para <b>'+esc(m.nome)+'</b> por um canal seguro. A senha não será mostrada de novo; no primeiro acesso a pessoa define a própria senha.</p><div class="card" style="background:var(--sunken)"><div class="fields"><div><div class="eyebrow">E-mail</div><b>'+esc(m.email)+'</b></div><div><div class="eyebrow">Senha temporária</div><b class="mono" style="font-size:1.1rem">'+esc(m.senha)+'</b></div><div class="wfull"><div class="eyebrow">Endereço</div><span class="mono">'+esc(location.origin)+'</span></div></div></div><div class="row"><button class="btn" data-act="copiarSenha">Copiar dados</button><span class="grow"></span><button class="btn pri" data-act="modalClose">Pronto</button></div>';
   }
   if(m.type==='confirm'){
     return '<h2>'+esc(m.title)+'</h2><p>'+esc(m.text)+'</p><div class="row"><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button><button class="btn '+(m.danger?'bad':'pri')+'" data-act="confirmOk">'+esc(m.ok)+'</button></div>';
@@ -582,7 +586,8 @@ async function salvarArquivo(nome,wb){
   const data=XLSX.write(wb,{type:'array',bookType:'xlsx'});
   try{ await S.DL.save({filename:nome,data:new Blob([data])}); }catch(e){ if(e&&e.code!=='declined') toast('Não foi possível baixar o arquivo ('+(e.code||'erro')+').','bad'); }
 }
-const dateCell=iso=>{ if(!iso) return null; const [y,m,d]=iso.slice(0,10).split('-'); return new Date(+y,+m-1,+d); };
+// data como número de série do Excel (evita o desvio de fuso/segundos de objetos Date)
+const dateCell=iso=>{ if(!iso) return null; const [y,m,d]=iso.slice(0,10).split('-'); return {t:'n',v:(Date.UTC(+y,+m-1,+d)-Date.UTC(1899,11,30))/864e5,z:'dd/mm/yyyy'}; };
 function wbPENF(P,ct,f){
   const wb=XLSX.utils.book_new();
   const a=[[null,null,null,null,null,null,null,null,'Parceiro',P.parceiro],[null,null,'PEDIDO DE EMISSÃO DE NOTA FISCAL',null,null,null,null,null,'Empresas ',P.empresas],[null,null,null,null,null,null,null,null,'Cidade ISS',P.cidadeISS],
@@ -627,6 +632,9 @@ function wbFolha(F,ct,f){
 function confirmar(title,text,ok,fn,danger){ S.modal={type:'confirm',title,text,ok,fn,danger}; render(); }
 const ACT={
   async logout(){ if(window.__logout) await window.__logout(); },
+  trocarSenha(){ if(window.__trocarSenha) window.__trocarSenha(); },
+  copiarSenha(){ const m=S.modal; const t='Sistema de Faturamento Médico\nEndereço: '+location.origin+'\nE-mail: '+m.email+'\nSenha temporária: '+m.senha; try{ navigator.clipboard.writeText(t).then(()=>toast('Dados copiados.'),()=>toast('Não foi possível copiar; selecione o texto.','bad')); }catch(e){ toast('Não foi possível copiar; selecione o texto.','bad'); } },
+  resetSenha(el){ const id=el.dataset.id; const p=S.prof[id]||{}; confirmar('Redefinir a senha de '+(p.name||'este usuário')+'?','Uma nova senha temporária será gerada e a senha atual deixa de funcionar.','Redefinir',async()=>{ try{ const r=await window.__contas.redefinir(id); S.modal={type:'senha',title:'Senha redefinida',nome:p.name||'',email:p.email||'',senha:r.senha}; render(); }catch(e){ toast(e.message,'bad'); } }); },
   nav(el){ S.v=el.dataset.v; if(el.dataset.ct) S.medCt=el.dataset.ct; S.modal=null; window.scrollTo(0,0); render(); },
   ovl(el,e){ if(e.target===el){ S.modal=null; render(); } },
   modalClose(){ S.modal=null; render(); },
@@ -743,6 +751,16 @@ const INP={
 document.addEventListener('click',e=>{ const el=e.target.closest('[data-act]'); if(!el||el.disabled) return; const fn=ACT[el.dataset.act]; if(fn) fn(el,e); });
 document.addEventListener('change',e=>{ const el=e.target.closest('[data-chg]'); if(!el) return; const fn=CHG[el.dataset.chg]; if(fn) fn(el,e); });
 document.addEventListener('input',e=>{ const el=e.target.closest('[data-inp]'); if(!el) return; const fn=INP[el.dataset.inp]; if(fn) fn(el,e); });
+document.addEventListener('submit',async e=>{ const f=e.target.closest('form[data-sub="criarConta"]'); if(!f) return; e.preventDefault(); if(S.busy) return;
+  const nome=$('#ncNome').value.trim(), email=$('#ncEmail').value.trim(), perfil=$('#ncPerfil').value;
+  if(!nome||!/^\S+@\S+\.\S+$/.test(email)){ toast('Informe nome e e-mail válidos.','bad'); return; }
+  S.busy=true; render();
+  try{ const r=await window.__contas.criar({nome,email}); const perms={}; PERMS.forEach(([k])=>perms[k]=!!PERFIS[perfil].perms[k]);
+    await wr('usuarios/'+r.id,()=>S.db.doc('usuarios/'+r.id).set({perfil,perms,ativo:true,criadoEm:nowISO(),criadoPor:S.uid}));
+    S.prof[r.id]={id:r.id,name:r.name,email:r.email,avatarUrl:''}; S.modal={type:'senha',title:'Conta criada',nome:r.name,email:r.email,senha:r.senha};
+    $('#ncNome').value=''; $('#ncEmail').value=''; }
+  catch(err){ toast(err.message||errMsg(err),'bad'); }
+  S.busy=false; render(); });
 document.addEventListener('keydown',e=>{ if(e.key==='Escape'&&S.modal){ S.modal=null; render(); } });
 setInterval(()=>{ if(S.v==='fechDet'||S.v==='fech'){ const a=document.activeElement; if(!a||a===document.body) render(); } },60000);
 boot();

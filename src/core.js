@@ -135,7 +135,7 @@ function calcFolha(calc, ct, medReg, params, config){
     const m=(medReg&&medReg[f.k])||{};
     const vinc=String(m.vinculo||ct.vinculoPadrao||'SOCIO').toUpperCase();
     const total=r2(f.total), vpn=r2(num(pn[f.k])), aReceber=r2(total-vpn), vret=r2(num(ret[f.k]));
-    const taxa= vinc==='SOCIO' && f.horas>taxaMin ? taxaV : 0;
+    const taxa= vinc==='SOCIO' && f.horas>taxaMin && aReceber>0 ? taxaV : 0;
     const liq=r2(aReceber-vret-taxa);
     const empresa=(m.empresaPagadora||ct.empresa||'').trim();
     const e=emp.find(x=>normTxt(x.sigla)===normTxt(empresa))||emp.find(x=>normTxt(x.razao)===normTxt(empresa));

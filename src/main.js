@@ -1,7 +1,7 @@
 import './styles.css';
 import * as XLSX from 'xlsx';
 import Chart from 'chart.js/auto';
-import { sb, configurado, platform, diagnostico } from './platform/client.js';
+import { chamar, criarPlataforma } from './platform/api.js';
 
 window.XLSX = XLSX;
 window.Chart = Chart;
@@ -9,89 +9,100 @@ window.Chart = Chart;
 const app = document.getElementById('app');
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-function telaLogin(estado = {}) {
-  const modo = estado.modo || 'entrar';
-  const titulo = { entrar: 'Entrar', criar: 'Criar conta', link: 'Receber link de acesso', nova: 'Definir nova senha' }[modo];
-  app.innerHTML = `
-  <div class="login">
-    <form class="login-card" id="fLogin" novalidate>
-      <div><div class="eyebrow">Faturamento Médico</div><h1>${titulo}</h1>
-      <p class="muted">${modo === 'criar' ? 'Depois de criar a conta, peça a um administrador para liberar seu acesso.' : modo === 'link' ? 'Enviamos um link para entrar sem senha.' : modo === 'nova' ? 'Escolha a nova senha da sua conta.' : 'Fechamento mensal de serviços médicos.'}</p></div>
-      ${modo === 'criar' ? `<label class="f">Nome completo<input type="text" id="lgNome" autocomplete="name" required value="${esc(estado.nome)}"></label>` : ''}
-      ${modo !== 'nova' ? `<label class="f">E-mail<input type="email" id="lgEmail" autocomplete="email" required value="${esc(estado.email)}"></label>` : ''}
-      ${modo === 'entrar' || modo === 'criar' || modo === 'nova' ? `<label class="f">Senha<input type="password" id="lgSenha" autocomplete="${modo === 'entrar' ? 'current-password' : 'new-password'}" required minlength="8"></label>` : ''}
-      ${estado.erro ? `<div class="banner bad">${esc(estado.erro)}</div>` : ''}
-      ${estado.ok ? `<div class="banner ok">${esc(estado.ok)}</div>` : ''}
-      <button class="btn pri" type="submit" ${estado.busy ? 'disabled' : ''}>${estado.busy ? 'Aguarde…' : titulo}</button>
-      <div class="row login-links">
-        ${modo !== 'entrar' ? '<button type="button" class="btn ghost sm" data-modo="entrar">Já tenho conta</button>' : ''}
-        ${modo !== 'criar' && modo !== 'nova' ? '<button type="button" class="btn ghost sm" data-modo="criar">Criar conta</button>' : ''}
-        ${modo === 'entrar' ? '<button type="button" class="btn ghost sm" data-modo="link">Esqueci a senha</button>' : ''}
-      </div>
-    </form>
-  </div>`;
-  app.querySelectorAll('[data-modo]').forEach((b) => b.addEventListener('click', () => telaLogin({ modo: b.dataset.modo })));
-  app.querySelector('#fLogin').addEventListener('submit', async (e) => {
+/* Telas: setup (primeiro administrador), entrar, trocar (senha temporária). */
+function tela(modo, estado = {}) {
+  const t = {
+    setup: ['Primeiro acesso', 'Crie a conta do administrador. Ela terá acesso total e poderá cadastrar a equipe.', 'Criar administrador'],
+    entrar: ['Entrar', 'Fechamento mensal de serviços médicos.', 'Entrar'],
+    trocar: ['Defina sua senha', 'Por segurança, troque a senha temporária que você recebeu.', 'Salvar senha e continuar'],
+  }[modo];
+  const campo = (id, rot, tipo, ac, v) => `<label class="f">${rot}<input type="${tipo}" id="${id}" autocomplete="${ac}" value="${esc(v || '')}" required></label>`;
+  app.innerHTML = `<div class="login"><form class="login-card" id="fLogin" novalidate>
+    <div><div class="eyebrow">Faturamento Médico</div><h1>${t[0]}</h1><p class="muted">${t[1]}</p></div>
+    ${modo === 'setup' ? campo('lgNome', 'Nome completo', 'text', 'name', estado.nome) : ''}
+    ${modo !== 'trocar' ? campo('lgEmail', 'E-mail', 'email', 'email', estado.email) : ''}
+    ${modo === 'trocar' ? campo('lgAtual', 'Senha temporária', 'password', 'current-password') : ''}
+    ${campo('lgSenha', modo === 'entrar' ? 'Senha' : 'Nova senha (mínimo 8 caracteres)', 'password', modo === 'entrar' ? 'current-password' : 'new-password')}
+    ${modo !== 'entrar' ? campo('lgSenha2', 'Repita a senha', 'password', 'new-password') : ''}
+    ${estado.erro ? `<div class="banner bad">${esc(estado.erro)}</div>` : ''}
+    ${estado.aviso ? `<div class="banner info">${esc(estado.aviso)}</div>` : ''}
+    <button class="btn pri" type="submit" ${estado.busy ? 'disabled' : ''}>${estado.busy ? 'Aguarde…' : t[2]}</button>
+    ${modo === 'entrar' ? '<p class="muted" style="font-size:.82rem;margin:0">Esqueceu a senha? Peça a um administrador para redefinir em Administração › Usuários.</p>' : ''}
+  </form></div>`;
+  const f = app.querySelector('#fLogin');
+  (f.querySelector('input') || {}).focus?.();
+  f.addEventListener('submit', async (e) => {
     e.preventDefault();
     const v = (id) => (document.getElementById(id) || {}).value || '';
-    const email = v('lgEmail').trim(), senha = v('lgSenha'), nome = v('lgNome').trim();
-    const tela = (o) => telaLogin({ modo, email, nome, ...o });
-    if (modo !== 'nova' && !/^\S+@\S+\.\S+$/.test(email)) return tela({ erro: 'Informe um e-mail válido.' });
-    if ((modo === 'criar' || modo === 'nova') && senha.length < 8) return tela({ erro: 'A senha precisa ter pelo menos 8 caracteres.' });
-    if (modo === 'criar' && !nome) return tela({ erro: 'Informe seu nome.' });
-    tela({ busy: true });
-    let r;
-    if (modo === 'entrar') r = await sb.auth.signInWithPassword({ email, password: senha });
-    else if (modo === 'criar') r = await sb.auth.signUp({ email, password: senha, options: { data: { name: nome }, emailRedirectTo: location.origin } });
-    else if (modo === 'link') r = await sb.auth.signInWithOtp({ email, options: { shouldCreateUser: false, emailRedirectTo: location.origin } });
-    else r = await sb.auth.updateUser({ password: senha });
-    if (r.error) {
-      const m = r.error.message || '';
-      const pt = /invalid login/i.test(m) ? 'E-mail ou senha incorretos.' : /not confirmed/i.test(m) ? 'Confirme seu e-mail pelo link que enviamos antes de entrar.' : /already registered/i.test(m) ? 'Este e-mail já tem conta. Use “Já tenho conta”.' : /rate limit/i.test(m) ? 'Muitas tentativas. Aguarde alguns minutos.' : m;
-      return tela({ erro: pt });
-    }
-    if (modo === 'criar' && !r.data.session) return telaLogin({ modo: 'entrar', email, ok: 'Conta criada. Confirme pelo link enviado ao seu e-mail e depois entre.' });
-    if (modo === 'link') return tela({ ok: 'Link enviado. Abra seu e-mail e clique para entrar.' });
-    if (modo === 'nova') { location.hash = ''; }
-    iniciar();
+    const dados = { nome: v('lgNome').trim(), email: v('lgEmail').trim(), senha: v('lgSenha'), senha2: v('lgSenha2'), atual: v('lgAtual') };
+    const erro = (m) => tela(modo, { ...dados, erro: m });
+    if (modo !== 'trocar' && !/^\S+@\S+\.\S+$/.test(dados.email)) return erro('Informe um e-mail válido.');
+    if (modo === 'setup' && !dados.nome) return erro('Informe seu nome.');
+    if (modo !== 'entrar' && dados.senha.length < 8) return erro('A senha precisa ter pelo menos 8 caracteres.');
+    if (modo !== 'entrar' && dados.senha !== dados.senha2) return erro('As senhas não conferem.');
+    tela(modo, { ...dados, busy: true });
+    try {
+      if (modo === 'setup') await chamar('auth', { action: 'setup', nome: dados.nome, email: dados.email, senha: dados.senha });
+      else if (modo === 'entrar') {
+        const r = await chamar('auth', { action: 'login', email: dados.email, senha: dados.senha });
+        if (r.trocarSenha) return tela('trocar');
+      } else await chamar('auth', { action: 'senha', atual: dados.atual, nova: dados.senha });
+      iniciar();
+    } catch (err) { erro(err.message); }
   });
+}
+
+/* Troca de senha a partir do menu lateral. */
+function trocarSenhaDialogo() {
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.innerHTML = `<form class="modal" role="dialog" aria-modal="true" id="fSenha"><h2>Trocar senha</h2>
+    <label class="f">Senha atual<input type="password" id="tsAtual" autocomplete="current-password"></label>
+    <label class="f">Nova senha (mínimo 8 caracteres)<input type="password" id="tsNova" autocomplete="new-password"></label>
+    <label class="f">Repita a nova senha<input type="password" id="tsNova2" autocomplete="new-password"></label>
+    <div id="tsMsg"></div>
+    <div class="row"><span class="grow"></span><button type="button" class="btn" id="tsCancel">Cancelar</button><button class="btn pri" type="submit">Salvar</button></div></form>`;
+  document.body.appendChild(ov);
+  const msg = (t, c) => { ov.querySelector('#tsMsg').innerHTML = `<div class="banner ${c}">${esc(t)}</div>`; };
+  ov.querySelector('#tsCancel').onclick = () => ov.remove();
+  ov.querySelector('#tsAtual').focus();
+  ov.querySelector('#fSenha').onsubmit = async (e) => {
+    e.preventDefault();
+    const a = ov.querySelector('#tsAtual').value, n = ov.querySelector('#tsNova').value, n2 = ov.querySelector('#tsNova2').value;
+    if (n.length < 8) return msg('A nova senha precisa ter pelo menos 8 caracteres.', 'bad');
+    if (n !== n2) return msg('As senhas não conferem.', 'bad');
+    try { await chamar('auth', { action: 'senha', atual: a, nova: n }); msg('Senha alterada.', 'ok'); setTimeout(() => ov.remove(), 900); }
+    catch (err) { msg(err.message, 'bad'); }
+  };
 }
 
 let iniciado = false;
 async function iniciar() {
   if (iniciado) return;
   iniciado = true;
-  window.__platform = { use: async (n) => platform[n] || null };
-  window.__logout = async () => { await sb.auth.signOut(); location.reload(); };
+  const plataforma = criarPlataforma();
+  window.__platform = { use: async (n) => plataforma[n] || null };
+  window.__contas = plataforma.contas;
+  window.__trocarSenha = trocarSenhaDialogo;
+  window.__logout = async () => { try { await chamar('auth', { action: 'logout' }); } catch { /* segue */ } location.reload(); };
+  app.innerHTML = '';
   await import('./app.js');
 }
+criarPlataforma.aoExpirar = () => { if (iniciado) location.reload(); };
 
 async function start() {
-  if (!configurado) {
-    const d = diagnostico || {};
-    const st = (v) => v === 'ok' ? '<span class="tag">ok</span>' : v === 'secreta' ? '<span class="tag bad">chave secreta recusada</span>' : v === 'invalida' ? '<span class="tag bad">formato inválido</span>' : '<span class="tag bad">não encontrada</span>';
-    app.innerHTML = `<div class="login"><div class="login-card" style="max-width:560px">
-      <div><div class="eyebrow">Faturamento Médico</div><h1>Configuração pendente</h1>
-      <p class="muted">Este site foi publicado sem os dados de conexão com o Supabase. Eles são gravados no momento do build, então é preciso cadastrá-los e publicar de novo.</p></div>
-      <div class="tbl"><table><tbody>
-        <tr><td>URL do projeto</td><td>${st(d.url)}</td><td class="mono">VITE_SUPABASE_URL</td></tr>
-        <tr><td>Chave pública (anon)</td><td>${st(d.key)}</td><td class="mono">VITE_SUPABASE_ANON_KEY</td></tr>
-      </tbody></table></div>
-      <ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px">
-        <li>No Supabase, abra <b>Project Settings › API</b> e copie a <b>Project URL</b> e a chave <b>anon public</b>. Não use a <i>service_role</i>.</li>
-        <li>Na Vercel, abra o projeto › <b>Settings › Environment Variables</b> e crie as duas variáveis acima, marcando <b>Production</b>, <b>Preview</b> e <b>Development</b>.</li>
-        <li>Vá em <b>Deployments</b>, clique em <b>⋯</b> no último deploy › <b>Redeploy</b>. Variáveis novas só valem em um deploy novo.</li>
-      </ol>
-      <p class="muted" style="font-size:.8rem">Também são aceitos os nomes criados pela integração Supabase da Vercel (NEXT_PUBLIC_SUPABASE_URL, SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, SUPABASE_ANON_KEY). Build: ${esc(d.build || '—')}${d.vercelEnv ? ' · ambiente ' + esc(d.vercelEnv) : ''}.</p>
+  try {
+    const s = await chamar('auth', { action: 'status' });
+    if (!s.temUsuarios) return tela('setup', { aviso: s.armazenamento === 'pasta' ? 'Os dados ficam na pasta .data deste servidor.' : '' });
+    if (!s.logado) return tela('entrar');
+    const me = await chamar('auth', { action: 'me' });
+    if (me.trocarSenha) return tela('trocar');
+    iniciar();
+  } catch (e) {
+    app.innerHTML = `<div class="login"><div class="login-card"><div class="eyebrow">Faturamento Médico</div><h1>${e.code === 'no_storage' ? 'Armazenamento não conectado' : 'Servidor indisponível'}</h1>
+      <p>${esc(e.message)}</p>
+      ${e.code === 'no_storage' ? '<ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"><li>Na Vercel, abra o projeto › <b>Storage</b> › <b>Create</b> › <b>Blob</b>.</li><li>Escolha o acesso <b>Private</b> e conecte ao projeto (todos os ambientes).</li><li>Em <b>Deployments</b>, clique em <b>⋯</b> › <b>Redeploy</b>.</li></ol>' : '<button class="btn" onclick="location.reload()">Tentar de novo</button>'}
     </div></div>`;
-    return;
   }
-  sb.auth.onAuthStateChange((ev) => {
-    if (ev === 'PASSWORD_RECOVERY') telaLogin({ modo: 'nova' });
-    else if (ev === 'SIGNED_IN' && !iniciado && !/type=recovery/.test(location.hash)) iniciar();
-  });
-  const { data: { session } } = await sb.auth.getSession();
-  if (/type=recovery/.test(location.hash)) return telaLogin({ modo: 'nova' });
-  if (session) iniciar(); else telaLogin();
 }
 start();

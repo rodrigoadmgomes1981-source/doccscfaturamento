@@ -1,17 +1,20 @@
-# Build estático + nginx. As variáveis VITE_* entram no build:
-#   docker build --build-arg VITE_SUPABASE_URL=... --build-arg VITE_SUPABASE_ANON_KEY=... -t faturamento-medico .
-#   docker run -p 8080:80 faturamento-medico
+# Hospedagem própria: dados gravados na pasta /data (monte um volume para não perder).
+#   docker build -t faturamento-medico .
+#   docker run -d -p 3000:3000 -v faturamento-dados:/data -e ADMIN_EMAILS=voce@empresa.com.br faturamento-medico
 FROM node:20-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-ARG VITE_SUPABASE_URL
-ARG VITE_SUPABASE_ANON_KEY
-ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
-RUN npm test && npm run build
+RUN npm test && npm run build && npm prune --omit=dev
 
-FROM nginx:1.27-alpine
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
+FROM node:20-alpine
+WORKDIR /app
+ENV NODE_ENV=production DATA_DIR=/data PORT=3000
+COPY --from=build /app/package.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/server ./server
+VOLUME /data
+EXPOSE 3000
+CMD ["node", "server/node-server.js"]

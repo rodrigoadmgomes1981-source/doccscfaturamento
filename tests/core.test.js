@@ -73,3 +73,11 @@ test('leitura do relatório Financeiro do Pega Plantão', () => {
   assert.deepEqual([ag.base[0].plan, ag.base[0].real, ag.base[0].apur, ag.base[0].na], [18, 6.05, 6, 1]);
   assert.equal(crmKey('47091/PR'), '47091-PR');
 });
+
+test('taxa de sócio não é cobrada de quem não tem valor a receber', () => {
+  const f = { base: [{ k: '1', s: 'PAP | HPS', n: 3, na: 3, plan: 36, real: 36, apur: 36, vApur: 0 }], medicos: { 1: { nome: 'Sem valor', crm: '1' } } };
+  const ct = { ...ctPAP, itens: [{ ...ctPAP.itens[1], valorPagar: 0 }] };
+  const F = calcFolha(calcular(f, ct), ct, {}, {}, {});
+  assert.equal(F.rows[0].taxa, 0);
+  assert.equal(F.rows[0].liq, 0);
+});

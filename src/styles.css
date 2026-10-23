@@ -56,6 +56,9 @@ button,input,select,textarea{font:inherit;color:inherit}
 .who{margin-top:auto;display:flex;gap:10px;align-items:center;padding:10px 8px;border-top:1px solid var(--side-act)}
 .who img{width:30px;height:30px;border-radius:50%}
 .who div{min-width:0;font-size:.82rem} .who small{display:block;color:var(--side-muted)}
+.who-acts{display:flex;gap:4px;padding:0 4px}
+.who-acts .btn{color:var(--side-fg)}
+.who-acts .btn:hover{background:var(--side-act)}
 .main{min-width:0;padding-block:24px 60px;padding-left:max(16px,2.2vw);padding-right:max(16px,env(safe-area-inset-right,0px),2.2vw);display:flex;flex-direction:column;gap:18px}
 .head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between}
 .head p{margin:4px 0 0;color:var(--muted)}
@@ -163,6 +166,7 @@ tr.adj td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
   .nav button[aria-current="true"]{box-shadow:inset 0 -3px 0 var(--accent)}
   .who{margin:0 0 0 auto;border:0;padding:0}
   .who div{display:none}
+  .who-acts .btn:first-child{display:none}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 

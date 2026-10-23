@@ -8,64 +8,49 @@ Sistema de fechamento mensal de serviços médicos:
 4. **Pedido de NF (PENF)** no layout da aba *PENF* do fechamento.
 5. **Folha de pagamento** no layout da *Planilha de Importação* (abas FOLHA MEDICA, Consolidada e Importação Sankhya).
 6. **Observações do mês**, com histórico de quem salvou e quando.
-7. **Dashboard gerencial**: faturamento e pagamento por especialidade e tipo/local, % pagamento/faturamento, horas, saldo remanescente do contrato e tempo de fechamento.
+7. **Dashboard gerencial**: faturamento e pagamento por especialidade e tipo/local, % pagamento/faturamento, horas, saldo remanescente e tempo de fechamento.
 
-Inclui também o cadastro de **contratos** (valores a pagar e a faturar, unidade hora/plantão/consulta/procedimento, dados da NF e do ERP), o cadastro de **médicos** e a administração de **usuários e permissões**.
+Inclui também cadastro de **contratos**, de **médicos** e **Administração** de usuários (contas, senhas e permissões).
+
+**Não depende de serviços externos**: na Vercel, os dados ficam no **Vercel Blob** (armazenamento privado da própria Vercel) e o login é do próprio sistema.
 
 ---
 
 ## Arquitetura
 
-| Camada | Tecnologia |
+| Parte | Como funciona |
 |---|---|
-| Front-end | Vite + JavaScript (sem framework), Chart.js, SheetJS (xlsx) |
-| Banco, login e tempo real | **Supabase** (Postgres + Auth + Realtime) |
-| Hospedagem | Vercel (ou Netlify / Docker + nginx) |
+| Telas | Vite + JavaScript, Chart.js, SheetJS (xlsx) |
+| API | `api/auth.js` e `api/db.js` (Vercel Functions) → `server/api.js` |
+| Dados | **Vercel Blob privado**, um arquivo JSON por registro. Fora da Vercel, uma pasta local (`.data/`). |
+| Login | E-mail e senha, com senha criptografada (scrypt) e sessão em cookie assinado (HttpOnly, 7 dias) |
+| Atualização entre usuários | A cada 8 s cada tela consulta um registro de mudanças e baixa só o que mudou |
 
-Os dados ficam na tabela `public.docs` (um JSON por registro, com `path` no formato `colecao/id`). As regras de acesso (RLS) garantem que:
+Regras de acesso, verificadas no servidor:
 
-- só usuários **liberados** em *Administração › Usuários*, ou cadastrados em `app_admins`, leem e gravam dados;
-- só quem tem a permissão **Administrar** altera usuários e parâmetros.
+- só lê e grava quem é **administrador geral** ou está **ativo** em Administração › Usuários;
+- **usuários** e **parâmetros** só podem ser alterados por quem tem a permissão *Administrar*;
+- gravações simultâneas no mesmo registro não se perdem (controle de versão por ETag).
 
-As permissões finas (importar, conferir, aprovar, emitir NF, gerar folha…) controlam as telas e os botões.
+As permissões finas (importar, conferir, aprovar, emitir NF, gerar folha…) controlam telas e botões.
 
 ```
-├── index.html
-├── src/
-│   ├── main.js              # login (Supabase Auth) e inicialização
-│   ├── app.js               # telas e fluxo do fechamento
-│   ├── core.js              # regras de cálculo (testadas)
-│   ├── styles.css
-│   └── platform/
-│       ├── client.js        # cria o cliente Supabase a partir do .env
-│       └── supabase.js      # camada de dados (docs + tempo real + usuários)
-├── supabase/
-│   ├── migrations/20261022000000_schema.sql   # tabelas, RLS, funções, realtime
-│   └── seed.sql                               # admins, parâmetros e contratos iniciais
-├── tests/                   # npm test (regras + camada de dados) e ambiente e2e
-├── vercel.json · netlify.toml · Dockerfile · nginx.conf
-└── .github/workflows/ci.yml
+├── api/                 # Vercel Functions (auth, db)
+├── server/
+│   ├── api.js           # login, permissões, dados, registro de mudanças
+│   ├── storage.js       # Vercel Blob privado ou pasta local
+│   ├── seed.js          # carga inicial (empresas pagadoras, naturezas, CRs, contratos PAP e MPF)
+│   └── node-server.js   # servidor para desenvolvimento e hospedagem própria
+├── src/                 # telas (app.js), regras de cálculo (core.js), login (main.js)
+├── tests/               # npm test
+├── vercel.json · Dockerfile · .github/workflows/ci.yml
 ```
 
 ---
 
-## Instalação passo a passo
+## Publicar na Vercel
 
-### 1. Supabase (banco e login)
-
-1. Crie um projeto em <https://supabase.com> (região **South America (São Paulo)**).
-2. Abra **SQL Editor** e rode, nesta ordem:
-   1. o conteúdo de `supabase/migrations/20261022000000_schema.sql`;
-   2. o conteúdo de `supabase/seed.sql`. **Antes**, troque ou adicione na primeira instrução os e-mails dos administradores gerais.
-3. Em **Authentication › URL Configuration**:
-   - **Site URL**: a URL de produção (ex.: `https://faturamento-medico.vercel.app`);
-   - **Redirect URLs**: a mesma URL e `http://localhost:5173` para desenvolvimento.
-4. Em **Authentication › Providers › Email**, mantenha *Email* habilitado. Recomendado: deixar *Confirm email* ligado.
-5. Copie **Project URL** e **anon public key** em **Project Settings › API**.
-
-> Com a CLI do Supabase, o arquivo de migração também pode ser aplicado com `supabase link` e depois `supabase db push`. O seed roda com `psql` ou pelo SQL Editor.
-
-### 2. GitHub
+### 1. GitHub
 
 ```bash
 git init
@@ -76,61 +61,59 @@ git remote add origin https://github.com/SEU-USUARIO/faturamento-medico.git
 git push -u origin main
 ```
 
-O workflow `.github/workflows/ci.yml` roda os testes e o build a cada push. Para o build do CI usar o seu Supabase, cadastre os *secrets* `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` em *Settings › Secrets and variables › Actions*. Sem eles o build passa do mesmo jeito.
+### 2. Projeto na Vercel
 
-### 3. Vercel
+1. Em <https://vercel.com/new>, importe o repositório. O framework **Vite** é detectado sozinho. Clique em **Deploy**.
+2. Abra o projeto › **Storage** › **Create** › **Blob**. Escolha o acesso **Private** e conecte ao projeto, marcando todos os ambientes.
+3. (Recomendado) Em **Settings › Environment Variables**, crie `ADMIN_EMAILS` com o seu e-mail. Assim só esse e-mail consegue criar a conta de administrador no primeiro acesso.
+4. Em **Deployments**, clique em **⋯** no último deploy › **Redeploy**. Conexões e variáveis novas só valem a partir de um deploy novo.
 
-1. Em <https://vercel.com/new>, importe o repositório. O framework **Vite** é detectado sozinho.
-2. Em **Environment Variables**, cadastre:
-   - `VITE_SUPABASE_URL` = Project URL
-   - `VITE_SUPABASE_ANON_KEY` = anon public key
-3. Clique em **Deploy**. A cada push na `main`, a Vercel publica de novo.
+### 3. Primeiro acesso
 
-Também são aceitos os nomes criados pela integração *Supabase* do Marketplace da Vercel (`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_ANON_KEY`).
+1. Abra o site. Aparece **Primeiro acesso**: crie a conta de administrador (nome, e-mail e senha).
+2. O sistema grava a carga inicial: empresas pagadoras, naturezas, centros de resultado e os contratos PAP e MPF.
+3. Em **Administração › Criar conta de acesso**, cadastre a equipe. O sistema gera uma **senha temporária** para você repassar, e a pessoa troca a senha no primeiro login.
+4. Esqueceu a senha? O administrador clica em **Redefinir senha** no usuário.
 
-**Se aparecer "Configuração pendente":** as variáveis não estavam disponíveis no build. Os valores do Supabase são gravados no site no momento do build. Para resolver:
-
-1. Cadastre as variáveis marcando **Production**.
-2. Vá em **Deployments › ⋯ › Redeploy**.
-3. Confira no log do build as linhas `[faturamento] Supabase URL: ok` e `[faturamento] Supabase key: ok`.
-
-A chave *service_role* é recusada de propósito: use sempre a *anon public*.
-
-### 4. Primeiro acesso
-
-1. Abra o site e use **Criar conta** com o e-mail cadastrado em `app_admins`. Confirme pelo e-mail recebido.
-2. Entre. Você terá acesso total (Administrador geral).
-3. Para liberar a equipe: cada pessoa cria a conta, e o administrador a encontra em **Administração › Usuários**, escolhe o perfil e ajusta as permissões.
+> **Plano da Vercel.** O plano *Hobby* é para uso pessoal e não comercial, e o Blob gratuito tem limite de **2.000 gravações por mês**. Se o limite estourar, o Blob fica bloqueado por 30 dias. Para uso na empresa, use o plano **Pro**. Nele o consumo deste sistema custa centavos por mês.
 
 ---
 
-## Outras hospedagens
+## Outras formas de rodar
 
-**Netlify**: importe o repositório. O `netlify.toml` já define build e redirecionamento. Cadastre as mesmas variáveis `VITE_*`.
-
-**Docker** (servidor próprio):
+**Computador ou servidor próprio (Node 20+)**: os dados ficam na pasta `.data`.
 
 ```bash
-docker build \
-  --build-arg VITE_SUPABASE_URL=https://SEU-PROJETO.supabase.co \
-  --build-arg VITE_SUPABASE_ANON_KEY=sua-chave \
-  -t faturamento-medico .
-docker run -d -p 8080:80 faturamento-medico
-```
-
----
-
-## Desenvolvimento local
-
-```bash
-cp .env.example .env      # preencha com os dados do Supabase
 npm install
-npm run dev               # http://localhost:5173
-npm test                  # regras de cálculo + camada de dados
-npm run build             # gera dist/
+npm run build
+ADMIN_EMAILS=voce@empresa.com.br npm start      # http://localhost:3000
 ```
 
-**Testar sem Supabase**: com `npm run dev` rodando, abra `http://localhost:5173/tests/e2e/index.html`. O sistema roda com um banco em memória, sem login, e tudo se perde ao recarregar. É útil para experimentar a importação do Pega Plantão.
+**Docker**: os dados ficam no volume `/data`.
+
+```bash
+docker build -t faturamento-medico .
+docker run -d -p 3000:3000 -v faturamento-dados:/data -e ADMIN_EMAILS=voce@empresa.com.br faturamento-medico
+```
+
+**Desenvolvimento**:
+
+```bash
+npm install
+npm run dev      # http://localhost:5173, recarga automática; dados em .data/
+npm test         # regras de cálculo, armazenamento e API
+```
+
+Para desenvolver usando o Blob da Vercel em vez da pasta local: `vercel link`, depois `vercel env pull .env` e `npm run dev`.
+
+---
+
+## Backup
+
+- **Vercel**: Storage › seu Blob › é possível baixar os arquivos. Ou use a CLI: `vercel blob list`.
+- **Servidor próprio ou Docker**: copie a pasta `.data` ou o volume `/data`.
+
+Os arquivos são JSON legíveis: `db/contratos/*.json`, `db/fechamentos/*.json`…
 
 ---
 
@@ -139,10 +122,10 @@ npm run build             # gera dist/
 | Item | Regra |
 |---|---|
 | Quantidade base | Itens por **hora** usam as horas apuradas (tolerância). Itens por **plantão** usam o nº de plantões com horas apuradas. **Consulta/procedimento** são informados na conferência. |
-| Pagamento | Qtd a pagar × valor a pagar do item. Se houver valor diferenciado para o médico, ele prevalece. Com a fonte "Pega Plantão", usa o *Total (Tolerância)* do relatório. |
+| Pagamento | Qtd a pagar × valor a pagar do item. Se houver valor diferenciado para o médico, ele prevalece. Com a fonte "Pega Plantão", usa o *Total (Tolerância)*. |
 | Faturamento | Qtd a faturar × valor a faturar do item. |
 | Margem operacional | Faturamento − pagamento. |
-| Taxa de sócio | R$ 150 para vínculo SÓCIO acima de 24 h (configurável por contrato). |
+| Taxa de sócio | R$ 150 para vínculo SÓCIO acima de 24 h e com valor a receber (configurável por contrato). |
 | Nº documento (ERP) | Nº do contrato + MM + AA (ex.: 986870726). |
 | Cód. reduzido | Sigla do CR + MM + AA (ex.: PAP0726). |
 | Vencimento | Último dia do mês seguinte à competência (editável). |
@@ -160,6 +143,5 @@ Os testes em `tests/core.test.js` reproduzem o fechamento PAP 07/2026:
 
 ## Observações
 
-- **SheetJS**: o projeto usa `xlsx@0.18.5`, a última versão publicada no npm. A SheetJS distribui versões mais novas pelo próprio CDN. Para atualizar, troque a dependência por `"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"` e rode `npm install`. O sistema só lê planilhas da própria equipe.
-- **Backup**: o Supabase faz backup diário nos planos pagos. No plano gratuito, exporte a tabela `docs` periodicamente (*Table Editor › Export*).
-- **Chave anon**: a `anon key` é pública por desenho. Quem protege os dados são as regras RLS do arquivo de migração. Nunca coloque a `service_role key` no front-end.
+- **SheetJS**: o projeto usa `xlsx@0.18.5`, a última versão publicada no npm. Versões mais novas são distribuídas pelo CDN da SheetJS. Para atualizar, troque a dependência por `"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"` e rode `npm install`.
+- **Segurança**: o Blob é privado (nenhum arquivo tem link público), as senhas são guardadas só como hash, e a API recusa pedidos vindos de outros sites. A chave de assinatura das sessões é gerada sozinha no primeiro uso. Para definir a sua, use a variável `SESSION_SECRET`; trocá-la desconecta todos os usuários.
