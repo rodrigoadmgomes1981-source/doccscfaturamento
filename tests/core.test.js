@@ -81,3 +81,12 @@ test('taxa de sócio não é cobrada de quem não tem valor a receber', () => {
   assert.equal(F.rows[0].taxa, 0);
   assert.equal(F.rows[0].liq, 0);
 });
+
+test('período de corte (26 a 25) cai na competência do mês final e vai para o PENF', async () => {
+  const { compDoPeriodo, periodoMeses } = await import('../src/core.js');
+  assert.equal(compDoPeriodo('26/08/2026 a 25/09/2026'), '2026-09');
+  assert.deepEqual(periodoMeses('26/08/2026 a 25/09/2026'), ['2026-08', '2026-09']);
+  assert.equal(compDoPeriodo('01/10/2026 a 31/10/2026'), '2026-10');
+  const t = descricaoNF('PERIODO {PERIODO}', calcular(fPAP, ctPAP), '2026-09', ctPAP, '26/08/2026 a 25/09/2026');
+  assert.equal(t, 'PERIODO 26/08/2026 A 25/09/2026');
+});

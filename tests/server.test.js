@@ -23,11 +23,14 @@ function fakeBlobSdk() {
       m.set(k, { body, etag, uploadedAt: new Date() });
       return { pathname: k, etag };
     },
+    // como no Blob real: a ETag da leitura vem do cabeçalho HTTP do CDN, em formato diferente
+    // (W/"...") do que o put aceita em ifMatch; head() devolve a ETag no formato da API.
     async get(k, o) {
       assert.equal(o.access, 'private');
       const cur = m.get(k); if (!cur) return null;
-      return { statusCode: 200, stream: new Blob([cur.body]).stream(), blob: { etag: cur.etag } };
+      return { statusCode: 200, stream: new Blob([cur.body]).stream(), blob: { etag: 'W/' + cur.etag } };
     },
+    async head(k) { const cur = m.get(k); if (!cur) throw new BlobNotFoundError(); return { pathname: k, etag: cur.etag }; },
     async del(k) { m.delete(k); },
     async list({ prefix }) { return { blobs: [...m.entries()].filter(([k]) => k.startsWith(prefix)).map(([k, v]) => ({ pathname: k, etag: v.etag, uploadedAt: v.uploadedAt })), hasMore: false }; },
   };
@@ -40,12 +43,14 @@ for (const [nome, criar] of [['pasta', () => fsStorage(mkdtempSync(path.join(os.
     await assert.rejects(st.put('db/contratos/A.json', { x: 2 }, { onlyIfAbsent: true }), Conflito);
     const b = await st.put('db/contratos/A.json', { x: 3 }, { ifMatch: a.etag });
     await assert.rejects(st.put('db/contratos/A.json', { x: 4 }, { ifMatch: a.etag }), Conflito);
-    const r = await st.get('db/contratos/A.json');
+    const r = await st.get('db/contratos/A.json', { forUpdate: true });
     assert.deepEqual(r.data, { x: 3 }); assert.equal(r.etag, b.etag);
+    await st.put('db/contratos/A.json', { x: 5 }, { ifMatch: r.etag });
     await st.put('db/fechamentos/F.json', {});
     assert.deepEqual((await st.list('db/contratos/')).map((x) => x.key), ['db/contratos/A.json']);
     await st.del('db/contratos/A.json');
     assert.equal(await st.get('db/contratos/A.json'), null);
+    assert.equal(await st.get('db/contratos/A.json', { forUpdate: true }), null);
   });
 }
 
@@ -65,9 +70,9 @@ function cliente() {
   };
 }
 
-test('API: primeiro administrador, contas, permissões e dados', async () => {
+for (const tipo of ['pasta', 'blob']) test(`API (${tipo}): primeiro administrador, contas, permissões e dados`, async () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'fm-api-'));
-  _setStorage(fsStorage(dir));
+  _setStorage(tipo === 'pasta' ? fsStorage(dir) : blobStorage(fakeBlobSdk()));
   process.env.ADMIN_EMAILS = 'chefe@empresa.com';
   const admin = cliente(), fat = cliente(), estranho = cliente();
   try {

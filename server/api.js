@@ -150,8 +150,12 @@ const perfilPublico = (u) => ({ id: u.id, name: u.nome || u.email.split('@')[0],
 // sys/journal.json = { seq, itens:[{s, p, at}] } — os últimos 1500 registros alterados.
 const JOURNAL = 'sys/journal.json';
 async function anotar(st, paths) {
+  // O registro de mudanças só serve para avisar as outras telas; se falhar, o dado já foi gravado.
+  try { await anotarJournal(st, paths); } catch (e) { console.error('Falha ao registrar mudança (dados gravados normalmente):', e); }
+}
+async function anotarJournal(st, paths) {
   await comRetentativa(async () => {
-    const r = await st.get(JOURNAL);
+    const r = await st.get(JOURNAL, { forUpdate: true });
     const j = r ? r.data : { seq: 0, itens: [] };
     const at = new Date().toISOString();
     for (const p of paths) j.itens.push({ s: ++j.seq, p, at });
@@ -263,7 +267,7 @@ async function criarUsuario(st, { email, nome, senha, admin, trocarSenha }) {
 }
 async function atualizarUsuario(st, id, fn) {
   return comRetentativa(async () => {
-    const r = await st.get(userKey(id));
+    const r = await st.get(userKey(id), { forUpdate: true });
     if (!r) throw new HttpErro(404, 'Usuário não encontrado.');
     const u = await fn(r.data);
     await st.put(userKey(id), u, { ifMatch: r.etag });
@@ -342,7 +346,7 @@ async function db(req, st) {
   if (op === 'update') {
     checkPath(body.path, true); exigeEscrita(ctx, body.path);
     const data = await comRetentativa(async () => {
-      const r = await st.get(docKey(body.path));
+      const r = await st.get(docKey(body.path), { forUpdate: true });
       if (!r) throw new HttpErro(404, 'not_found: ' + body.path, 'invalid_argument');
       const novo = deepMerge(r.data, body.patch || {});
       await st.put(docKey(body.path), novo, { ifMatch: r.etag });

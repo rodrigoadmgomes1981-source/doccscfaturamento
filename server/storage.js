@@ -6,7 +6,7 @@
  *  • Pasta local (DATA_DIR, padrão ./.data) em desenvolvimento, Docker ou servidor próprio.
  *
  * Interface comum:
- *   get(key, {fresh})            -> { data, etag } | null
+ *   get(key, {fresh, forUpdate}) -> { data, etag } | null   (forUpdate: etag válida para ifMatch)
  *   put(key, data, {ifMatch, onlyIfAbsent}) -> { etag }   (lança Conflito se a versão mudou)
  *   del(key)
  *   list(prefix)                 -> [{ key, etag, uploadedAt }]
@@ -31,14 +31,26 @@ export function blobStorage(sdk) {
   const isPrecondition = (e) => e && (e.name === 'BlobPreconditionFailedError' || e instanceof sdk.BlobPreconditionFailedError);
   return {
     tipo: 'blob',
-    async get(key, { fresh = true } = {}) {
+    /**
+     * forUpdate: a versão (ETag) vem do head(), no mesmo formato que o put() aceita em ifMatch.
+     * A ETag do get() vem do cabeçalho HTTP do CDN (pode vir com aspas ou W/) e não serve para ifMatch.
+     * Ordem head → get → put(ifMatch): se alguém gravar no meio, o put é recusado e a operação é refeita.
+     */
+    async get(key, { fresh = true, forUpdate = false } = {}) {
       checkKey(key);
+      const naoExiste = (e) => e && (e.name === 'BlobNotFoundError' || e instanceof sdk.BlobNotFoundError);
+      let etag = null;
+      if (forUpdate) {
+        try { const h = await sdk.head(key, { ...opts }); etag = h && h.etag; }
+        catch (e) { if (naoExiste(e)) return null; throw e; }
+        if (!etag) return null;
+      }
       let r;
-      try { r = await sdk.get(key, { ...opts, useCache: !fresh }); }
-      catch (e) { if (e && (e.name === 'BlobNotFoundError' || e instanceof sdk.BlobNotFoundError)) return null; throw e; }
+      try { r = await sdk.get(key, { ...opts, useCache: forUpdate ? false : !fresh }); }
+      catch (e) { if (naoExiste(e)) return null; throw e; }
       if (!r || r.statusCode !== 200 || !r.stream) return null;
       const text = await new Response(r.stream).text();
-      return { data: JSON.parse(text), etag: r.blob.etag };
+      return { data: JSON.parse(text), etag: forUpdate ? etag : r.blob.etag };
     },
     async put(key, data, { ifMatch, onlyIfAbsent } = {}) {
       checkKey(key);

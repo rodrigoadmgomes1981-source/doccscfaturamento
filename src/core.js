@@ -45,7 +45,10 @@ function parsePega(aoa){
   if(!rows.length) throw new Error('O relatório não tem plantões.');
   return {periodo, geradoEm, rows};
 }
-function compDoPeriodo(periodo){ const m=String(periodo||'').match(/\d{2}\/(\d{2})\/(\d{4})/); return m? m[2]+'-'+m[1] : ''; }
+/** Meses (AAAA-MM) de início e fim do período do relatório, ex.: "26/08/2026 a 25/09/2026" → ['2026-08','2026-09']. */
+function periodoMeses(periodo){ return [...String(periodo||'').matchAll(/\d{2}\/(\d{2})\/(\d{4})/g)].map(m=>m[2]+'-'+m[1]); }
+/** Competência sugerida = mês em que o período termina (ciclos de corte como 26 a 25 caem no mês final). */
+function compDoPeriodo(periodo){ const ms=periodoMeses(periodo); return ms.length? ms[ms.length-1] : ''; }
 function setorKey(r){ return (r.local? r.local+' | ' : '')+r.setor; }
 
 /** Agrega os plantões por médico x setor (base imutável do fechamento). */
@@ -163,14 +166,14 @@ function qtdTxt(n){ return Number.isInteger(+n)? String(+n) : Number(n).toLocale
 function periodoTxt(comp){ const {y,m}=mmYY(comp); const fim=new Date(Date.UTC(+y,+m,0)).getUTCDate(); return '01/'+m+'/'+y+' A '+String(fim).padStart(2,'0')+'/'+m+'/'+y; }
 
 /** Preenche o modelo de descrição da NF com os números do fechamento. */
-function descricaoNF(tpl, calc, comp, ct){
+function descricaoNF(tpl, calc, comp, ct, periodo){
   const itens=calc.porItem.filter(p=>p.qFat>0||p.totFat>0);
   const unid=itens.length? (UNIDADES[itens[0].uFat]||'').toUpperCase() : 'HORA';
   const unidPl = unid==='HORA'?'HORAS':unid==='PLANTÃO'?'PLANTÕES':unid==='CONSULTA'?'CONSULTAS':'PROCEDIMENTOS';
   const vu=[...new Set(itens.map(p=>p.qFat?r2(p.totFat/p.qFat):0))];
   const ctx={
     ESPECIALIDADES:[...new Set(itens.map(p=>p.esp.toUpperCase()))].join(', '),
-    PERIODO:periodoTxt(comp), COMPETENCIA:mmYY(comp).m+'/'+mmYY(comp).y,
+    PERIODO: periodo? String(periodo).toUpperCase().replace(/\s+A\s+/,' A ') : periodoTxt(comp), COMPETENCIA:mmYY(comp).m+'/'+mmYY(comp).y,
     QTD_TOTAL:qtdTxt(r4(itens.reduce((s,p)=>s+p.qFat,0))), UNIDADE:unidPl,
     VALOR_UNITARIO: vu.length===1? brl(vu[0]).replace(/\s/g,'') : 'CONFORME ITENS',
     VALOR_TOTAL: brl(r2(itens.reduce((s,p)=>s+p.totFat,0))).replace(/ /g,' '),
@@ -180,4 +183,4 @@ function descricaoNF(tpl, calc, comp, ct){
   return String(tpl||'REFERENTE A PRESTAÇÃO DE SERVIÇOS MÉDICOS ({ESPECIALIDADES}) - PERÍODO {PERIODO}\n{ITENS}\nVALOR TOTAL {VALOR_TOTAL}').replace(/\{([A-Z_]+)\}/g,(m,k)=>ctx[k]!=null?ctx[k]:m);
 }
 
-export {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, brl, qtdTxt, periodoTxt, descricaoNF};
+export {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, brl, qtdTxt, periodoTxt, descricaoNF};

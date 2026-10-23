@@ -1,4 +1,4 @@
-import {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, brl, qtdTxt, periodoTxt, descricaoNF} from './core.js';
+import {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, brl, qtdTxt, periodoTxt, descricaoNF} from './core.js';
 
 /* ============================================================
    APP
@@ -344,7 +344,7 @@ function tabResumo(f,ct,c){
 function penfDados(f,ct,c){
   const emp=(S.config&&S.config.empresas||[]).find(e=>normTxt(e.sigla)===normTxt(ct.empresa));
   const def={empresa:ct.empresa||'',data:nowISO().slice(0,10),tomador:ct.tomador||'',cnpj:ct.cnpj||'',endereco:ct.endereco||'',municipio:ct.municipio||'',
-    descricao:descricaoNF(ct.descricaoNF,c,f.competencia,ct),empenho:ct.empenho||'Não possui',parceiro:ct.parceiro||'',empresas:ct.codEmpresaFat||(emp?emp.cod:''),
+    descricao:descricaoNF(ct.descricaoNF,c,f.competencia,ct,f.periodo),empenho:ct.empenho||'Não possui',parceiro:ct.parceiro||'',empresas:ct.codEmpresaFat||(emp?emp.cod:''),
     cidadeISS:ct.cidadeISS||'',tipoOperacao:ct.tipoOperacao||'',centroResultado:ct.centroResultado||'',produtoServico:ct.produtoServico||'',
     quantidade:r4(c.porItem.reduce((s,p)=>s+p.qFat,0)),valor:c.totais.totFat};
   if(f.penf&&f.penf.emitidaEm) return f.penf;
@@ -504,7 +504,8 @@ function viewModal(){
         '<label class="f">Competência<input type="month" id="nComp" value="'+esc(m.comp||'')+'" data-chg="novo" data-f="comp"></label></div>';
       const ex=m.ct&&m.comp&&fechById(m.ct+'_'+m.comp.replace('-',''));
       if(ex) out+= lock(ex)? '<div class="banner bad">Já existe um fechamento aprovado para este contrato e competência. Reabra-o antes de reimportar.</div>' : '<div class="banner warn">Já existe um fechamento em andamento para este contrato e competência. Importar substitui o relatório e mantém ajustes, conferências e observações.</div>';
-      if(m.comp&&p.periodo&&compDoPeriodo(p.periodo)!==m.comp) out+='<div class="banner warn">O período do relatório ('+esc(p.periodo)+') não corresponde à competência escolhida.</div>';
+      if(m.comp&&p.periodo&&!periodoMeses(p.periodo).includes(m.comp)) out+='<div class="banner warn">O período do relatório ('+esc(p.periodo)+') não inclui a competência escolhida. Confira o arquivo ou a competência.</div>';
+      else if(m.comp&&p.periodo&&new Set(periodoMeses(p.periodo)).size>1) out+='<div class="banner info">Período de corte '+esc(p.periodo)+' lançado na competência '+compTxt(m.comp)+'. O pedido de NF usa este período.</div>';
     }
     const ok=p&&m.ct&&m.comp&&!(m.ct&&m.comp&&fechById(m.ct+'_'+m.comp.replace('-',''))&&lock(fechById(m.ct+'_'+m.comp.replace('-',''))));
     out+='<div class="row"><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button><button class="btn pri" data-act="criarFech"'+(ok&&!S.busy?'':' disabled')+'>'+(S.busy?'Importando…':'Importar e iniciar fechamento')+'</button></div>';
@@ -710,7 +711,7 @@ const CHG={
     catch(e){ m.parsed=null; m.erro=e.message; } render(); },
   novo(el){ S.modal[el.dataset.f]=el.value; render(); },
   async reimport(el){ const file=el.files[0]; if(!file) return; const f=fechById(S.fid); const ct=ctById(f.contratoId);
-    try{ const p=await parseArquivoPega(file); if(p.periodo&&compDoPeriodo(p.periodo)!==f.competencia) toast('Atenção: o período do relatório ('+p.periodo+') difere da competência.','bad');
+    try{ const p=await parseArquivoPega(file); if(p.periodo&&!periodoMeses(p.periodo).includes(f.competencia)) toast('Atenção: o período do relatório ('+p.periodo+') difere da competência.','bad');
       await importarPara(ct,f.competencia,p,file.name); toast('Relatório reimportado.'); }catch(e){ toast(e.message||errMsg(e),'bad'); } },
   mapFech(el){ const f=fechById(S.fid); const ct=ctById(f.contratoId); if(!el.value) return; const mp=(ct.mapeamento||[]).filter(m=>m.s!==el.dataset.s); mp.push({s:el.dataset.s,item:el.value});
     wr('contratos/'+ct.id,()=>S.db.doc('contratos/'+ct.id).update({mapeamento:mp})); updFech(f.id,{eventos:evento(f,'map','Setor "'+el.dataset.s+'" vinculado a '+(el.value==='__ignorar'?'Não faturar':((ct.itens||[]).find(i=>i.id===el.value)||{}).especialidade))}); },
