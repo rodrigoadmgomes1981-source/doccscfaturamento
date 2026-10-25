@@ -1,9 +1,6 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
 
 export default defineConfig({
-  plugins: [react()],
-  // Aceita também as variáveis criadas pela integração Vercel ↔ Supabase (NEXT_PUBLIC_*)
-  envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
-  build: { chunkSizeWarningLimit: 900 },
-})
+  build: { target: 'es2020', chunkSizeWarningLimit: 1500 },
+  server: { watch: { ignored: ['**/.data/**'] } },
+});
