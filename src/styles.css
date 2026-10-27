@@ -17,21 +17,8 @@ img{max-width:100%}
   --f-body:"Figtree", "Segoe UI", system-ui, sans-serif;
   --f-mono:"IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
   --r:8px; --shadow:0 1px 2px rgba(15,38,36,.06),0 4px 16px rgba(15,38,36,.06);
+  color-scheme:light;
 }
-@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#0D1614; --surface:#14201E; --sunken:#1A2A27; --fg:#E2ECEA; --muted:#93A8A4; --line:#2A3D3A;
-  --accent:#4DB3A8; --accent-ink:#06211E; --accent-soft:#173A36;
-  --pay:#E0915A; --pay-soft:#3A2618; --plan:#6D84A3; --real:#93AFD9;
-  --ok:#62C08A; --ok-soft:#173826; --warn:#E3B05A; --warn-soft:#3A2D13; --bad:#EE7B7B; --bad-soft:#3E1C1C; --info:#8FB0E8; --info-soft:#1C2A42;
-  --side:#08110F; --side-fg:#CFE3DF; --side-muted:#7C9893; --side-act:#16302D;
-  --shadow:0 1px 2px rgba(0,0,0,.3); color-scheme:dark}}
-:root[data-theme="dark"]{
-  --bg:#0D1614; --surface:#14201E; --sunken:#1A2A27; --fg:#E2ECEA; --muted:#93A8A4; --line:#2A3D3A;
-  --accent:#4DB3A8; --accent-ink:#06211E; --accent-soft:#173A36;
-  --pay:#E0915A; --pay-soft:#3A2618; --plan:#6D84A3; --real:#93AFD9;
-  --ok:#62C08A; --ok-soft:#173826; --warn:#E3B05A; --warn-soft:#3A2D13; --bad:#EE7B7B; --bad-soft:#3E1C1C; --info:#8FB0E8; --info-soft:#1C2A42;
-  --side:#08110F; --side-fg:#CFE3DF; --side-muted:#7C9893; --side-act:#16302D;
-  --shadow:0 1px 2px rgba(0,0,0,.3); color-scheme:dark}
 *{box-sizing:border-box}
 html,body{height:100%}
 body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:14px;line-height:1.45}
@@ -95,11 +82,18 @@ input[readonly],input:disabled,select:disabled,textarea:disabled{background:var(
 @media (max-width:560px){.fields .w2{grid-column:1/-1}}
 .tbl{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
 table{border-collapse:collapse;width:100%;font-size:.86rem}
-th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;text-align:left;background:var(--sunken);position:sticky;top:0}
+th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;text-align:left;background:var(--sunken);position:sticky;top:0;z-index:2;box-shadow:inset 0 -1px 0 var(--line)}
+/* tabelas do fechamento: rolam dentro da caixa, com cabeçalho e total fixos */
+.tbl.fix{max-height:calc(100vh - 150px);max-height:calc(100dvh - 150px);overflow:auto}
+.tbl.fix tfoot td{position:sticky;bottom:0;z-index:1;box-shadow:inset 0 1px 0 var(--line)}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.btn.del{color:var(--bad);padding:4px 7px}
+.btn.del:hover{background:var(--bad-soft);border-color:transparent}
+.btn.del svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9;display:block}
 th,td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}
 tbody tr:hover td{background:color-mix(in srgb,var(--accent-soft) 35%,transparent)}
 tfoot td{font-weight:700;background:var(--sunken)}
-td input[type=number]{width:96px;text-align:right;padding:4px 6px}
+td input[type=number],td input[inputmode=decimal]{width:96px;text-align:right;padding:4px 6px}
 td input[type=text]{min-width:140px;padding:4px 6px}
 td select{padding:4px 6px;min-width:150px}
 tr.sub td{background:var(--sunken);font-size:.8rem}
@@ -171,7 +165,7 @@ tr.adj td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 
 /* login */
-.login{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding-block:24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));background:linear-gradient(160deg,var(--side) 0 38%,var(--bg) 38%)}
+.login{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding-block:24px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));background:linear-gradient(160deg,var(--accent-soft) 0 38%,var(--bg) 38%)}
 .login-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:28px;width:100%;max-width:400px;display:flex;flex-direction:column;gap:14px;box-shadow:var(--shadow)}
 .login-card p{margin:6px 0 0}
 .login-links{justify-content:center;gap:4px}

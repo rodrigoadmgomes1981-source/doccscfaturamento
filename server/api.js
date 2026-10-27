@@ -144,6 +144,10 @@ function exigeEscrita(ctx, p) {
   const col = p.split('/')[0];
   if ((col === 'usuarios' || col === 'config') && !ctx.podeAdministrar) throw new HttpErro(403, 'Somente administradores alteram usuários e parâmetros.', 'invalid_argument');
 }
+// registro de exclusões: só pode ser criado, nunca alterado ou apagado
+function exigeAuditoriaNova(op, p) {
+  if (p.split('/')[0] === 'auditoria' && op !== 'set') throw new HttpErro(403, 'O registro de exclusões não pode ser alterado nem apagado.', 'invalid_argument');
+}
 const perfilPublico = (u) => ({ id: u.id, name: u.nome || u.email.split('@')[0], email: u.email });
 
 /* ------------------------ registro de mudanças ------------------------ */
@@ -336,6 +340,11 @@ async function db(req, st) {
 
   if (op === 'set') {
     checkPath(body.path, true); exigeEscrita(ctx, body.path);
+    if (body.path.startsWith('auditoria/')) {
+      try { await st.put(docKey(body.path), body.data, { onlyIfAbsent: true }); } catch (e) { if (e instanceof Conflito) throw new HttpErro(403, 'O registro de exclusões não pode ser alterado.', 'invalid_argument'); throw e; }
+      await anotar(st, [body.path]);
+      return json({ ok: true, data: body.data });
+    }
     if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data)) throw new HttpErro(400, 'Documento inválido.', 'invalid_argument');
     await st.put(docKey(body.path), body.data);
     await anotar(st, [body.path]);
@@ -344,7 +353,7 @@ async function db(req, st) {
   }
 
   if (op === 'update') {
-    checkPath(body.path, true); exigeEscrita(ctx, body.path);
+    checkPath(body.path, true); exigeEscrita(ctx, body.path); exigeAuditoriaNova(op, body.path);
     const data = await comRetentativa(async () => {
       const r = await st.get(docKey(body.path), { forUpdate: true });
       if (!r) throw new HttpErro(404, 'not_found: ' + body.path, 'invalid_argument');
@@ -358,7 +367,7 @@ async function db(req, st) {
   }
 
   if (op === 'delete') {
-    checkPath(body.path, true); exigeEscrita(ctx, body.path);
+    checkPath(body.path, true); exigeEscrita(ctx, body.path); exigeAuditoriaNova(op, body.path);
     await st.del(docKey(body.path));
     await anotar(st, [body.path]);
     if (body.path.startsWith('usuarios/')) cacheAcesso.delete(body.path.split('/')[1]);

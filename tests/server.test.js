@@ -135,6 +135,12 @@ for (const tipo of ['pasta', 'blob']) test(`API (${tipo}): primeiro administrado
     await admin('db', { op: 'delete', path: 'usuarios/' + conta.id });
     assert.equal(Object.keys((await fat('db', { op: 'loadCollections', collections: ['contratos'] })).body.docs).length, 0);
 
+    // registro de exclusões: cria, mas não altera nem apaga
+    assert.equal((await admin('db', { op: 'set', path: 'auditoria/1', data: { motivo: 'teste' } })).status, 200);
+    assert.equal((await admin('db', { op: 'set', path: 'auditoria/1', data: { motivo: 'outro' } })).status, 403);
+    assert.equal((await admin('db', { op: 'update', path: 'auditoria/1', patch: { motivo: 'x' } })).status, 403);
+    assert.equal((await admin('db', { op: 'delete', path: 'auditoria/1' })).status, 403);
+
     // pedido de outro site é recusado
     const outro = await handle(new Request(BASE + '/api/db', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://malicioso.com' }, body: '{}' }), 'db');
     assert.equal(outro.status, 403);

@@ -90,3 +90,26 @@ test('período de corte (26 a 25) cai na competência do mês final e vai para o
   const t = descricaoNF('PERIODO {PERIODO}', calcular(fPAP, ctPAP), '2026-09', ctPAP, '26/08/2026 a 25/09/2026');
   assert.equal(t, 'PERIODO 26/08/2026 A 25/09/2026');
 });
+
+test('linha excluída sai dos totais e volta ao restaurar', () => {
+  const base = calcular(fPAP, ctPAP).totais;
+  const sem = calcular({ ...fPAP, excluidos: { '63383|pacs': { motivo: 'teste' } } }, ctPAP);
+  assert.equal(sem.totais.apur, base.apur - 102);
+  assert.equal(sem.totais.totFat, Math.round((base.totFat - 102 * 189.38) * 100) / 100);
+  assert.equal(sem.linhas.length, 24);
+  assert.equal(calcular({ ...fPAP, excluidos: { '63383|pacs': null } }, ctPAP).totais.apur, base.apur);
+});
+
+test('valores no formato brasileiro e com R$', async () => {
+  const { num } = await import('../src/core.js');
+  for (const [t, v] of [['189,38', 189.38], ['1.234,56', 1234.56], ['R$ 1.234,56', 1234.56], ['1234.56', 1234.56], ['1,234.56', 1234.56], ['166,6666666667', 166.6666666667], ['2.000', 2000], ['', 0], ['abc', 0], [42, 42]]) assert.equal(num(t), v, String(t));
+});
+
+test('sem valor a pagar no contrato usa o valor/hora do Pega Plantão (PP)', () => {
+  const ct = { ...ctPAP, itens: [{ ...ctPAP.itens[0], valorPagar: 0 }, ctPAP.itens[1]] };
+  const f = { base: [{ k: '1', s: 'PAP | PACS', n: 2, na: 2, plan: 12, real: 12, apur: 12, vApur: 2170.92 }], medicos: { 1: { nome: 'A', crm: '1' } } };
+  const l = calcular(f, ct).linhas[0];
+  assert.equal(l.pagPP, true); assert.equal(l.vPag, 180.91); assert.equal(l.totPag, 2170.92); assert.equal(l.vFat, 189.38);
+  const l2 = calcular(f, ctPAP).linhas[0];
+  assert.equal(l2.pagPP, false); assert.equal(l2.totPag, 2000);
+});

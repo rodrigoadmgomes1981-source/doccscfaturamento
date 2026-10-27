@@ -7,11 +7,11 @@ const PERMS=[
   ['dashboard','Ver dashboard gerencial'],['fechamentos','Ver fechamentos'],['importar','Importar relatório Pega Plantão'],
   ['conferir','Conferir e ajustar quantidades'],['aprovar','Aprovar ou devolver fechamento'],['emitir_nf','Emitir pedido de NF'],
   ['gerar_folha','Gerar folha de pagamento'],['observacoes','Registrar observações'],['contratos','Cadastrar contratos'],
-  ['medicos','Cadastrar médicos'],['reabrir','Reabrir fechamento aprovado'],['admin','Administrar usuários e parâmetros']];
+  ['medicos','Cadastrar médicos'],['reabrir','Reabrir fechamento aprovado'],['excluir','Excluir fechamentos e linhas de médico'],['admin','Administrar usuários e parâmetros']];
 const ALL=Object.fromEntries(PERMS.map(p=>[p[0],true]));
 const PERFIS={
   admin:{label:'Administrador',perms:ALL},
-  faturamento:{label:'Faturamento',perms:{dashboard:1,fechamentos:1,importar:1,conferir:1,emitir_nf:1,observacoes:1,contratos:1,medicos:1}},
+  faturamento:{label:'Faturamento',perms:{dashboard:1,fechamentos:1,importar:1,conferir:1,emitir_nf:1,observacoes:1,contratos:1,medicos:1,excluir:1}},
   aprovador:{label:'Aprovador',perms:{dashboard:1,fechamentos:1,aprovar:1,observacoes:1}},
   folha:{label:'Folha / Financeiro',perms:{dashboard:1,fechamentos:1,gerar_folha:1,medicos:1,observacoes:1}},
   consulta:{label:'Consulta',perms:{dashboard:1,fechamentos:1}}
@@ -20,7 +20,7 @@ const STATUS={conferencia:['Em conferência','p-info'],aguardando:['Aguardando a
 const MESES=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
 const S={boot:'loading',db:null,U:null,DL:null,me:null,owner:false,uid:null,
-  contratos:null,fechs:null,fechsRaw:null,cong:{},folhas:{},usuarios:[],config:null,medicos:{},prof:{},
+  contratos:null,auditoria:[],fechs:null,fechsRaw:null,cong:{},folhas:{},usuarios:[],config:null,medicos:{},prof:{},
   v:'dash',fid:null,tab:'conf',modal:null,toast:null,draft:null,
   dash:{ct:'',comp:'',andamento:false},conf:{modo:'medico',q:'',open:{}},medCt:'',medQ:'',shifts:{},userHits:[],busy:false,obsDraft:{},devolver:''};
 
@@ -28,6 +28,7 @@ const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fN=(n,d=2)=>(n==null||isNaN(n))?'—':Number(n).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
 const fH=n=>(n==null||isNaN(n))?'—':Number(n).toLocaleString('pt-BR',{maximumFractionDigits:2});
+const dec=v=>(v==null||v==='')?'':String(v).replace('.',',');
 const fPct=n=>(n==null||isNaN(n)||!isFinite(n))?'—':(n*100).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+'%';
 const fDT=iso=>{ if(!iso) return '—'; const d=new Date(iso); return d.toLocaleDateString('pt-BR')+' '+d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'}); };
 const fD=iso=>{ if(!iso) return '—'; const [y,m,d]=String(iso).slice(0,10).split('-'); return d+'/'+m+'/'+y; };
@@ -53,6 +54,7 @@ let profPend=false;
 async function resolverPerfis(){
   if(!S.U||profPend) return;
   const ids=new Set(S.usuarios.map(u=>u.id));
+  (S.auditoria||[]).forEach(a=>a.por&&ids.add(a.por));
   (S.fechs||[]).forEach(f=>{(f.eventos||[]).forEach(e=>e.por&&ids.add(e.por)); ((f.obs&&f.obs.historico)||[]).forEach(e=>e.por&&ids.add(e.por));});
   const falta=[...ids].filter(i=>!S.prof[i]); if(!falta.length) return;
   profPend=true; try{ const ps=await S.U.profiles([...ids]); S.prof=ps; }catch(e){} profPend=false; render();
@@ -83,6 +85,7 @@ async function boot(){
   db.collection('congelados').onSnapshot(s=>{S.cong={}; s.docs.forEach(d=>S.cong[d.id]=d.data()); montarFechs(); render();},onErr);
   db.collection('folhas').onSnapshot(s=>{S.folhas={}; s.docs.forEach(d=>S.folhas[d.id]=d.data()); montarFechs(); render();},onErr);
   db.collection('usuarios').onSnapshot(s=>{S.usuarios=s.docs.map(d=>({id:d.id,...d.data()})); render(); resolverPerfis();},onErr);
+  db.collection('auditoria').onSnapshot(s=>{S.auditoria=s.docs.map(d=>({id:d.id,...d.data()})).sort((x,y)=>(y.em||'').localeCompare(x.em||'')); render(); resolverPerfis();},onErr);
   db.collection('medicos').onSnapshot(s=>{const m={}; s.docs.forEach(d=>m[d.id]=(d.data().lista)||{}); S.medicos=m; render();},onErr);
   db.doc('config/geral').onSnapshot(s=>{S.config=s.exists?s.data():{}; render();},onErr);
   try{ if(location.hash){ const h=location.hash.slice(1); if(['dash','fech','ct','med','admin'].includes(h)) S.v=h; } }catch(e){}
@@ -101,7 +104,15 @@ function montarFechs(){
 
 /* ---------- render ---------- */
 let charts=[];
+// evita redesenhar a tela dentro de outro redesenho (ex.: campo perde o foco durante a troca)
+let renderizando=false, renderPendente=false;
 function render(){
+  if(renderizando){ renderPendente=true; return; }
+  renderizando=true;
+  try{ renderAgora(); } finally { renderizando=false; }
+  if(renderPendente){ renderPendente=false; render(); }
+}
+function renderAgora(){
   const app=$('#app');
   const a=document.activeElement; let keep=null;
   if(a&&a.id&&(a.tagName==='INPUT'||a.tagName==='TEXTAREA')&&a.type!=='file'&&a.type!=='checkbox'){ keep={id:a.id,val:a.value,s:a.selectionStart,e:a.selectionEnd}; }
@@ -240,11 +251,18 @@ function viewFechs(){
   const head='<div class="head"><div><div class="eyebrow">Processo mensal</div><h1>Fechamentos</h1><p>Importe o relatório Financeiro do Pega Plantão, confira, aprove e emita NF e folha.</p></div>'+
     (can('importar')?'<button class="btn pri" data-act="novoFech">Importar relatório Pega Plantão</button>':'')+'</div>';
   if(!(S.contratos||[]).length) return head+emptyState('Cadastre um contrato primeiro','O fechamento usa os valores a pagar e a faturar de cada especialidade e tipo do contrato.',can('contratos')?'<button class="btn pri" data-act="novoCt">Cadastrar contrato</button>':'');
-  if(!fs.length) return head+emptyState('Nenhum fechamento ainda','Clique em “Importar relatório Pega Plantão” e escolha o arquivo Financeiro exportado do Pega Plantão (.xlsx). O sistema calcula as horas apuradas e os valores por médico, especialidade e tipo.');
-  return head+'<div class="tbl"><table><thead><tr><th>Contrato</th><th>Competência</th><th>Status</th><th class="n">Horas apuradas</th><th class="n">Faturamento</th><th class="n">Pagamento</th><th class="n">Margem</th><th>Iniciado em</th><th class="n">Tempo</th></tr></thead><tbody>'+
+  if(!fs.length) return head+emptyState('Nenhum fechamento ainda','Clique em “Importar relatório Pega Plantão” e escolha o arquivo Financeiro exportado do Pega Plantão (.xlsx). O sistema calcula as horas apuradas e os valores por médico, especialidade e tipo.')+viewAuditoria();
+  const del=can('excluir');
+  return head+'<div class="tbl"><table><thead><tr>'+(del?'<th style="width:1%"><span class="sr">Excluir</span></th>':'')+'<th>Contrato</th><th>Competência</th><th>Status</th><th class="n">Horas apuradas</th><th class="n">Faturamento</th><th class="n">Pagamento</th><th class="n">Margem</th><th>Iniciado em</th><th class="n">Tempo</th></tr></thead><tbody>'+
     fs.map(f=>{const ct=ctById(f.contratoId)||{}; const c=calcular(f,ct); const t=tempoFech(f);
-      return '<tr><td><button class="btn ghost sm" data-act="openFech" data-id="'+f.id+'"><b>'+esc(ct.sigla||'?')+'</b>&nbsp;'+esc(ct.nome||'Contrato removido')+'</button></td><td>'+compTxt(f.competencia)+'</td><td>'+pill(statusDe(f))+'</td><td class="n">'+fH(c.totais.apur)+'</td><td class="n">'+brl(c.totais.totFat)+'</td><td class="n">'+brl(c.totais.totPag)+'</td><td class="n">'+brl(c.totais.margem)+'</td><td>'+fDT(f.t&&f.t.inicio)+'</td><td class="n">'+(t?fDur(t.ms)+(t.fim?'':' …'):'—')+'</td></tr>';}).join('')+
-    '</tbody></table></div>';
+      return '<tr>'+(del?'<td><button class="btn ghost sm del" data-act="excluirFechLista" data-id="'+f.id+'" title="Excluir fechamento" aria-label="Excluir fechamento '+esc((ct.sigla||'')+' '+compTxt(f.competencia))+'"><svg viewBox=\"0 0 24 24\" aria-hidden=\"true\"><path d=\"M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6\"/></svg></button></td>':'')+'<td><button class="btn ghost sm" data-act="openFech" data-id="'+f.id+'"><b>'+esc(ct.sigla||'?')+'</b>&nbsp;'+esc(ct.nome||'Contrato removido')+'</button></td><td>'+compTxt(f.competencia)+'</td><td>'+pill(statusDe(f))+'</td><td class="n">'+fH(c.totais.apur)+'</td><td class="n">'+brl(c.totais.totFat)+'</td><td class="n">'+brl(c.totais.totPag)+'</td><td class="n">'+brl(c.totais.margem)+'</td><td>'+fDT(f.t&&f.t.inicio)+'</td><td class="n">'+(t?fDur(t.ms)+(t.fim?'':' …'):'—')+'</td></tr>';}).join('')+
+    '</tbody></table></div>'+viewAuditoria();
+}
+function viewAuditoria(){
+  const lista=(S.auditoria||[]).slice(0,100);
+  if(!lista.length) return '';
+  return '<div class="card"><h3>Registro de exclusões</h3><p class="muted" style="margin-top:0">Fechamentos excluídos, com quem excluiu, quando e o motivo. Este registro não pode ser apagado pelo sistema.</p><div class="tbl"><table><thead><tr><th>Data e hora</th><th>Usuário</th><th>Contrato</th><th>Competência</th><th>Status</th><th class="n">Faturamento</th><th class="n">Pagamento</th><th>Motivo</th></tr></thead><tbody>'+
+    lista.map(a=>'<tr><td>'+fDT(a.em)+'</td><td>'+esc(nomeDe(a.por))+'</td><td>'+esc(a.contrato||'')+'</td><td>'+compTxt(a.competencia)+'</td><td>'+esc(a.status||'')+'</td><td class="n">'+brl(a.faturamento)+'</td><td class="n">'+brl(a.pagamento)+'</td><td style="white-space:normal;min-width:220px">'+esc(a.motivo||'')+'</td></tr>').join('')+'</tbody></table></div></div>';
 }
 
 function viewFech(){
@@ -258,7 +276,7 @@ function viewFech(){
   const curIdx=steps.findIndex(s=>!s[1]);
   const stepper='<div class="steps">'+steps.map((s,i)=>'<div class="step '+(s[1]?'done':(i===curIdx?'cur':''))+'"><b>'+s[0]+'</b>'+(s[1]&&i<3?fDT(s[1])+'<br>':'')+'<span class="muted">'+s[2]+'</span></div>').join('')+'</div>';
   const head='<div class="head"><div><button class="btn ghost sm" data-act="nav" data-v="fech">← Fechamentos</button><div class="eyebrow" style="margin-top:6px">'+esc(ct.sigla||'')+' · Contrato '+esc((ct.numero||'')+(ct.ano||''))+'</div><h1>'+esc(ct.nome||'Contrato')+' — '+compTxt(f.competencia)+'</h1><p>'+pill(st)+' &nbsp;Tempo de fechamento: <b>'+(t?fDur(t.ms):'—')+'</b>'+(t&&!t.fim?' (em andamento)':'')+(f.periodo?' · Período do relatório: '+esc(f.periodo):'')+'</p></div>'+
-    '<div class="row">'+(can('reabrir')&&lock(f)?'<button class="btn warn" data-act="reabrir">Reabrir</button>':'')+(S.owner&&!lock(f)?'<button class="btn bad" data-act="excluirFech">Excluir</button>':'')+'</div></div>';
+    '<div class="row">'+(can('reabrir')&&lock(f)?'<button class="btn warn" data-act="reabrir">Reabrir</button>':'')+(can('excluir')?'<button class="btn bad" data-act="excluirFech">Excluir fechamento</button>':'')+'</div></div>';
   const tabs=[['conf','Conferência'],['resumo','Resumo faturamento e pagamento'],['nf','Pedido de NF'],['folha','Folha de pagamento'],['obs','Observações e log']];
   const tabBar='<div class="tabs" role="tablist">'+tabs.map(x=>'<button role="tab" data-act="tab" data-tab="'+x[0]+'" aria-selected="'+(S.tab===x[0])+'">'+x[1]+'</button>').join('')+'</div>';
   let body='';
@@ -281,6 +299,8 @@ function tabConf(f,ct,c){
       c.naoMapeados.map((m,i)=>'<tr><td>'+esc(m.s)+'</td><td class="n">'+m.n+'</td><td><select id="mp'+i+'" data-chg="mapFech" data-s="'+esc(m.s)+'"'+((can('conferir')||can('contratos'))&&!L?'':' disabled')+'><option value="">Escolha…</option>'+itens.map(it=>'<option value="'+it.id+'"'+(sugerirItem(m.s,itens)===it.id?' data-sug="1"':'')+'>'+esc(it.especialidade+' — '+it.tipo)+'</option>').join('')+'<option value="__ignorar">Não faturar (ignorar)</option></select></td></tr>').join('')+
       '</tbody></table></div>'+(itens.length?'':'<p class="muted">O contrato ainda não tem itens. Cadastre especialidades e tipos em Contratos.</p>')+'</div>';
   }
+  if(!L){ const usados=new Set(c.linhas.map(l=>l.itemId)); const semV=(ct.itens||[]).filter(i=>usados.has(i.id)&&(!num(i.valorFaturar)||(!num(i.valorPagar)&&i.fontePag!=='pega')));
+    if(semV.length) out+='<div class="banner warn"><div class="grow"><b>'+semV.length+' item(ns) do contrato sem valor cadastrado.</b> '+semV.slice(0,4).map(i=>esc(i.especialidade+' · '+i.tipo)+' ('+[!num(i.valorPagar)&&i.fontePag!=='pega'?'a pagar':'',!num(i.valorFaturar)?'a faturar':''].filter(Boolean).join(' e ')+')').join('; ')+(semV.length>4?' e mais '+(semV.length-4):'')+'. Sem valor a pagar, o sistema usa o valor/hora configurado no Pega Plantão (marcado PP).</div>'+(can('contratos')?'<button class="btn sm" data-act="editCt" data-id="'+esc(ct.id)+'">Abrir contrato</button>':'')+'</div>'; }
   const q=normTxt(S.conf.q);
   const linhas=c.linhas.filter(l=>!q||normTxt(l.nome+' '+l.crm+' '+l.esp+' '+l.tipo).includes(q));
   out+='<div class="row"><div class="tabs" style="border:0"><button data-act="confModo" data-m="medico" aria-selected="'+(S.conf.modo==='medico')+'">Por médico</button><button data-act="confModo" data-m="item" aria-selected="'+(S.conf.modo==='item')+'">Por especialidade e tipo</button></div><span class="grow"></span>'+
@@ -288,22 +308,26 @@ function tabConf(f,ct,c){
     (ed&&can('importar')?'<label class="btn sm" for="fRe">Reimportar relatório</label><input type="file" id="fRe" accept=".xlsx,.xls" hidden data-chg="reimport">':'')+
     (ed?'<button class="btn sm" data-act="confTodos">Marcar todos como conferidos</button>':'')+'</div>';
   if(S.conf.modo==='item'){
-    out+='<div class="tbl" data-keep="ti"><table><thead><tr><th>Especialidade</th><th>Tipo / local</th><th class="n">Médicos</th><th class="n">Contratado/mês</th><th class="n">Planejadas</th><th class="n">Realizadas</th><th class="n">Apuradas</th><th class="n">Qtd pagar</th><th class="n">Qtd faturar</th><th class="n">Pagamento</th><th class="n">Faturamento</th></tr></thead><tbody>'+
+    out+='<div class="tbl fix" data-keep="ti"><table><thead><tr><th>Especialidade</th><th>Tipo / local</th><th class="n">Médicos</th><th class="n">Contratado/mês</th><th class="n">Planejadas</th><th class="n">Realizadas</th><th class="n">Apuradas</th><th class="n">Qtd pagar</th><th class="n">Qtd faturar</th><th class="n">Pagamento</th><th class="n">Faturamento</th></tr></thead><tbody>'+
       c.porItem.map(p=>'<tr><td>'+esc(p.esp)+'</td><td>'+esc(p.tipo)+'</td><td class="n">'+p.medicos+'</td><td class="n">'+fH(p.contratado)+'</td><td class="n">'+fH(p.plan)+'</td><td class="n">'+fH(p.real)+'</td><td class="n">'+fH(p.apur)+'</td><td class="n">'+fH(p.qPag)+' <span class="muted">'+UNIDADES[p.uPag]+'</span></td><td class="n">'+fH(p.qFat)+' <span class="muted">'+UNIDADES[p.uFat]+'</span></td><td class="n">'+brl(p.totPag)+'</td><td class="n">'+brl(p.totFat)+'</td></tr>').join('')+
       '</tbody><tfoot><tr><td colspan="4">Total</td><td class="n">'+fH(c.totais.plan)+'</td><td class="n">'+fH(c.totais.real)+'</td><td class="n">'+fH(c.totais.apur)+'</td><td></td><td></td><td class="n">'+brl(c.totais.totPag)+'</td><td class="n">'+brl(c.totais.totFat)+'</td></tr></tfoot></table></div>';
   } else {
     out+='<p class="muted" style="margin:0">Quantidade base = horas apuradas (tolerância) do Pega Plantão para itens por hora; nº de plantões apurados para itens por plantão; consultas e procedimentos são informados aqui. Alterações exigem justificativa e ficam no log.</p>';
-    out+='<div class="tbl" data-keep="tm"><table><thead><tr><th></th><th>Médico</th><th>CRM</th><th>Especialidade · tipo</th><th class="n">Plant.</th><th class="n">Planejadas</th><th class="n">Realizadas</th><th class="n">Apuradas</th><th class="n">Qtd pagar</th><th class="n">Valor pagar</th><th class="n">Pagamento</th><th class="n">Qtd faturar</th><th class="n">Faturamento</th><th>Justificativa</th><th>Conferido</th></tr></thead><tbody>'+
+    const podeExcl=ed&&can('excluir');
+    out+='<div class="tbl fix" data-keep="tm"><table><thead><tr><th></th><th>Médico</th><th>CRM</th><th>Especialidade · tipo</th><th class="n">Plant.</th><th class="n">Planejadas</th><th class="n">Realizadas</th><th class="n">Apuradas</th><th class="n">Qtd pagar</th><th class="n">Valor pagar</th><th class="n">Pagamento</th><th class="n">Qtd faturar</th><th class="n">Valor faturar</th><th class="n">Faturamento</th><th>Justificativa</th><th>Conferido</th></tr></thead><tbody>'+
       linhas.map((l,i)=>{ const id=safeKey(l.key);
-        const row='<tr class="'+(l.ajustado?'adj':'')+'"><td><button class="btn ghost sm" data-act="expand" data-key="'+esc(l.key)+'" aria-label="Ver plantões">'+(S.conf.open[l.key]?'▾':'▸')+'</button></td><td>'+esc(l.nome)+'</td><td class="mono">'+esc(l.crm)+'</td><td>'+esc(l.esp)+' <span class="muted">· '+esc(l.tipo)+'</span></td><td class="n">'+l.n+'</td><td class="n">'+fH(l.plan)+'</td><td class="n">'+fH(l.real)+'</td><td class="n"><b>'+fH(l.apur)+'</b></td>'+
-          '<td class="n">'+(ed?'<input type="number" step="any" id="qp_'+id+'" value="'+l.qPag+'" data-chg="aj" data-key="'+esc(l.key)+'" data-f="qPag" data-base="'+l.qPagBase+'">':fH(l.qPag))+' <span class="muted">'+UNIDADES[l.uPag]+'</span></td>'+
-          '<td class="n">'+brl(l.vPag)+(l.difer?' <span class="tag">dif.</span>':'')+'</td><td class="n">'+brl(l.totPag)+'</td>'+
-          '<td class="n">'+(ed?'<input type="number" step="any" id="qf_'+id+'" value="'+l.qFat+'" data-chg="aj" data-key="'+esc(l.key)+'" data-f="qFat" data-base="'+l.qFatBase+'">':fH(l.qFat))+' <span class="muted">'+UNIDADES[l.uFat]+'</span></td><td class="n">'+brl(l.totFat)+'</td>'+
+        const row='<tr class="'+(l.ajustado?'adj':'')+'"><td style="white-space:nowrap">'+(podeExcl?'<button class="btn ghost sm del" data-act="excluirLinha" data-key="'+esc(l.key)+'" title="Excluir esta linha do fechamento" aria-label="Excluir linha de '+esc(l.nome)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>':'')+'<button class="btn ghost sm" data-act="expand" data-key="'+esc(l.key)+'" aria-label="Ver plantões">'+(S.conf.open[l.key]?'▾':'▸')+'</button></td><td>'+esc(l.nome)+'</td><td class="mono">'+esc(l.crm)+'</td><td>'+esc(l.esp)+' <span class="muted">· '+esc(l.tipo)+'</span></td><td class="n">'+l.n+'</td><td class="n">'+fH(l.plan)+'</td><td class="n">'+fH(l.real)+'</td><td class="n"><b>'+fH(l.apur)+'</b></td>'+
+          '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="qp_'+id+'" value="'+dec(l.qPag)+'" data-chg="aj" data-key="'+esc(l.key)+'" data-f="qPag" data-base="'+l.qPagBase+'">':fH(l.qPag))+' <span class="muted">'+UNIDADES[l.uPag]+'</span></td>'+
+          '<td class="n">'+brl(l.vPag)+(l.difer?' <span class="tag">dif.</span>':'')+(l.pagPP?' <span class="tag" title="Valor/hora configurado no Pega Plantão">PP</span>':'')+(!l.vPag?' <span class="tag bad">sem valor</span>':'')+'</td><td class="n">'+brl(l.totPag)+'</td>'+
+          '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="qf_'+id+'" value="'+dec(l.qFat)+'" data-chg="aj" data-key="'+esc(l.key)+'" data-f="qFat" data-base="'+l.qFatBase+'">':fH(l.qFat))+' <span class="muted">'+UNIDADES[l.uFat]+'</span></td><td class="n">'+brl(l.vFat)+(!l.vFat?' <span class="tag bad">sem valor</span>':'')+'</td><td class="n">'+brl(l.totFat)+'</td>'+
           '<td>'+(ed&&l.ajustado?'<input type="text" id="js_'+id+'" value="'+esc(l.just)+'" placeholder="Motivo do ajuste" data-chg="ajJust" data-key="'+esc(l.key)+'">':esc(l.just))+(l.ajustado&&!l.just?' <span class="tag bad">sem justificativa</span>':'')+'</td>'+
           '<td><input type="checkbox" id="cf_'+id+'" data-chg="conf" data-key="'+esc(l.key)+'"'+(l.conferido?' checked':'')+(ed?'':' disabled')+' aria-label="Conferido"></td></tr>';
         return row+(S.conf.open[l.key]?shiftsRows(f,ct,l):'');
       }).join('')+
-      '</tbody><tfoot><tr><td colspan="5">Total ('+linhas.length+' linhas)</td><td class="n">'+fH(c.totais.plan)+'</td><td class="n">'+fH(c.totais.real)+'</td><td class="n">'+fH(c.totais.apur)+'</td><td></td><td></td><td class="n">'+brl(c.totais.totPag)+'</td><td></td><td class="n">'+brl(c.totais.totFat)+'</td><td colspan="2"></td></tr></tfoot></table></div>';
+      '</tbody><tfoot><tr><td colspan="5">Total ('+linhas.length+' linhas)</td><td class="n">'+fH(c.totais.plan)+'</td><td class="n">'+fH(c.totais.real)+'</td><td class="n">'+fH(c.totais.apur)+'</td><td></td><td></td><td class="n">'+brl(c.totais.totPag)+'</td><td></td><td></td><td class="n">'+brl(c.totais.totFat)+'</td><td colspan="2"></td></tr></tfoot></table></div>';
+    const exc=Object.entries(f.excluidos||{}).filter(([k,v])=>v);
+    if(exc.length&&!lock(f)) out+='<div class="card"><h3>Linhas excluídas deste fechamento ('+exc.length+')</h3><div class="tbl"><table><thead><tr><th>Médico</th><th>Especialidade · tipo</th><th class="n">Apuradas</th><th class="n">Pagamento</th><th class="n">Faturamento</th><th>Excluída por</th><th>Motivo</th><th></th></tr></thead><tbody>'+
+      exc.map(([k,v])=>'<tr><td>'+esc(v.nome||k)+'</td><td>'+esc((v.esp||'')+' · '+(v.tipo||''))+'</td><td class="n">'+fH(v.apur)+'</td><td class="n">'+brl(v.totPag)+'</td><td class="n">'+brl(v.totFat)+'</td><td>'+esc(nomeDe(v.por))+' · '+fDT(v.em)+'</td><td style="white-space:normal;min-width:200px">'+esc(v.motivo||'')+'</td><td>'+(podeExcl?'<button class="btn sm" data-act="restaurarLinha" data-key="'+esc(k)+'">Restaurar</button>':'')+'</td></tr>').join('')+'</tbody></table></div></div>';
   }
   // ações de fluxo
   const pend=c.totais.linhas-c.totais.conferidos; const semJust=c.linhas.filter(l=>l.ajustado&&!l.just).length;
@@ -336,7 +360,7 @@ function tabResumo(f,ct,c){
     c.porItem.map(p=>'<tr><td>'+esc(p.esp)+'</td><td>'+esc(p.tipo)+'</td><td class="n">'+fH(p.contratado)+'</td><td class="n">'+fH(p.plan)+'</td><td class="n">'+fH(p.real)+'</td><td class="n">'+fH(p.apur)+'</td><td class="n">'+fH(p.qFat)+'</td><td class="n">'+brl(p.totFat)+'</td><td class="n">'+brl(p.totPag)+'</td><td class="n">'+brl(p.totFat-p.totPag)+'</td><td class="n">'+fPct(p.totFat?(p.totFat-p.totPag)/p.totFat:null)+'</td></tr>').join('')+
     '</tbody><tfoot><tr><td colspan="3">Total</td><td class="n">'+fH(T.plan)+'</td><td class="n">'+fH(T.real)+'</td><td class="n">'+fH(T.apur)+'</td><td class="n">'+fH(T.qFat)+'</td><td class="n">'+brl(T.totFat)+'</td><td class="n">'+brl(T.totPag)+'</td><td class="n">'+brl(T.margem)+'</td><td class="n">'+fPct(T.totFat?T.margem/T.totFat:null)+'</td></tr></tfoot></table></div></div>';
   const pm={}; c.linhas.forEach(l=>{const m=pm[l.k]||(pm[l.k]={nome:l.nome,crm:l.crm,esp:new Set(),plan:0,real:0,apur:0,pag:0,fat:0}); m.esp.add(l.esp+' · '+l.tipo); m.plan+=l.plan;m.real+=l.real;m.apur+=l.apur;m.pag+=l.totPag;m.fat+=l.totFat;});
-  out+='<div class="card"><h3>Por médico</h3><div class="tbl"><table><thead><tr><th>Médico</th><th>CRM</th><th>Especialidade · tipo</th><th class="n">Planejadas</th><th class="n">Realizadas</th><th class="n">Apuradas</th><th class="n">Pagamento</th><th class="n">Faturamento</th></tr></thead><tbody>'+
+  out+='<div class="card"><h3>Por médico</h3><div class="tbl fix"><table><thead><tr><th>Médico</th><th>CRM</th><th>Especialidade · tipo</th><th class="n">Planejadas</th><th class="n">Realizadas</th><th class="n">Apuradas</th><th class="n">Pagamento</th><th class="n">Faturamento</th></tr></thead><tbody>'+
     Object.values(pm).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR')).map(m=>'<tr><td>'+esc(m.nome)+'</td><td class="mono">'+esc(m.crm)+'</td><td>'+esc([...m.esp].join('; '))+'</td><td class="n">'+fH(m.plan)+'</td><td class="n">'+fH(m.real)+'</td><td class="n">'+fH(m.apur)+'</td><td class="n">'+brl(m.pag)+'</td><td class="n">'+brl(m.fat)+'</td></tr>').join('')+'</tbody></table></div></div>';
   return out;
 }
@@ -384,10 +408,10 @@ function tabFolha(f,ct,c){
   out+='<div class="card"><div class="fields"><label class="f">Contrato<input type="text" value="'+esc((ct.numero||'')+(ct.ano||'')+' '+(ct.sigla||''))+'" readonly></label><label class="f">Empresa<input type="text" value="'+esc(ct.empresa||'')+'" readonly></label><label class="f">Período de ref.<input type="text" value="'+mmYY(f.competencia).mm+'/'+mmYY(f.competencia).yy+'" readonly></label>'+
     '<label class="f">Responsável<input type="text" id="flResp" value="'+esc(F.responsavel)+'" data-chg="folhaP" data-f="responsavel"'+(ed?'':' disabled')+'></label><label class="f">Número documento<input type="text" value="'+esc(F.numeroDoc)+'" readonly class="mono"></label><label class="f">Centro de resultados<input type="text" value="'+esc(ct.centroResultado||'')+'" readonly></label><label class="f">Cód. reduzido contrato<input type="text" value="'+esc(F.codReduzido)+'" readonly></label>'+
     '<label class="f">Data de vencimento<input type="date" id="flVcto" value="'+esc(F.dataVcto)+'" data-chg="folhaP" data-f="dataVcto"'+(ed?'':' disabled')+'></label></div></div>';
-  out+='<div class="tbl" data-keep="tf"><table><thead><tr><th>CRM</th><th>Nome</th><th class="n">Horas</th><th class="n">Total realizado</th><th class="n">Desconto PN</th><th class="n">A receber</th><th class="n">Retenções</th><th class="n">Taxa sócio</th><th class="n">Líquido</th><th>Vínculo</th><th>Tipo pgto.</th><th>Empresa pagadora</th><th>Cód.</th><th>CPF/CNPJ conta</th><th>Empresa PJ</th><th>Alertas</th></tr></thead><tbody>'+
+  out+='<div class="tbl fix" data-keep="tf"><table><thead><tr><th>CRM</th><th>Nome</th><th class="n">Horas</th><th class="n">Total realizado</th><th class="n">Desconto PN</th><th class="n">A receber</th><th class="n">Retenções</th><th class="n">Taxa sócio</th><th class="n">Líquido</th><th>Vínculo</th><th>Tipo pgto.</th><th>Empresa pagadora</th><th>Cód.</th><th>CPF/CNPJ conta</th><th>Empresa PJ</th><th>Alertas</th></tr></thead><tbody>'+
     F.rows.map(r=>{const id=safeKey(r.k); return '<tr><td class="mono">'+esc(r.crm)+'</td><td>'+esc(r.nome)+'</td><td class="n">'+fH(r.horas)+'</td><td class="n">'+fN(r.total)+'</td>'+
-      '<td class="n">'+(ed?'<input type="number" step="0.01" id="fpn_'+id+'" value="'+(r.pn||'')+'" placeholder="0,00" data-chg="folhaV" data-k="'+esc(r.k)+'" data-f="pn">':fN(r.pn))+'</td><td class="n">'+fN(r.aReceber)+'</td>'+
-      '<td class="n">'+(ed?'<input type="number" step="0.01" id="frt_'+id+'" value="'+(r.ret||'')+'" placeholder="0,00" data-chg="folhaV" data-k="'+esc(r.k)+'" data-f="ret">':fN(r.ret))+'</td><td class="n">'+fN(r.taxa)+'</td><td class="n"><b>'+fN(r.liq)+'</b></td>'+
+      '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="fpn_'+id+'" value="'+dec((r.pn||''))+'" placeholder="0,00" data-chg="folhaV" data-k="'+esc(r.k)+'" data-f="pn">':fN(r.pn))+'</td><td class="n">'+fN(r.aReceber)+'</td>'+
+      '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="frt_'+id+'" value="'+dec((r.ret||''))+'" placeholder="0,00" data-chg="folhaV" data-k="'+esc(r.k)+'" data-f="ret">':fN(r.ret))+'</td><td class="n">'+fN(r.taxa)+'</td><td class="n"><b>'+fN(r.liq)+'</b></td>'+
       '<td>'+esc(r.vinculo)+'</td><td>'+esc(r.tipoPag)+' <span class="muted mono">'+esc(r.natureza)+'</span></td><td>'+esc(r.empresa)+'</td><td class="mono">'+esc(r.codEmpresa)+'</td><td class="mono">'+esc(r.cpfConta)+'</td><td>'+esc(r.empresaPJ)+'</td><td>'+r.alertas.map(a=>'<span class="tag '+a.c+'">'+esc(a.t)+'</span>').join(' ')+'</td></tr>';}).join('')+
     '</tbody><tfoot><tr><td colspan="2">Total ('+F.rows.length+' médicos)</td><td class="n">'+fH(F.tot.horas)+'</td><td class="n">'+fN(F.tot.total)+'</td><td class="n">'+fN(F.tot.pn)+'</td><td class="n">'+fN(F.tot.aReceber)+'</td><td class="n">'+fN(F.tot.ret)+'</td><td class="n">'+fN(F.tot.taxa)+'</td><td class="n">'+fN(F.tot.liq)+'</td><td colspan="7"></td></tr></tfoot></table></div>';
   const prova=r2(F.tot.total-c.totais.totPag);
@@ -421,7 +445,7 @@ function novoContrato(){ return {id:'',sigla:'',nome:'',numero:'',ano:'',centroR
 function viewContratoEd(){
   const d=S.draft; if(!d) return emptyState('Nada em edição','','<button class="btn" data-act="nav" data-v="ct">Voltar</button>');
   const ed=can('contratos'); const dis=ed?'':' disabled';
-  const fld=(k,l,cls,type,extra)=>'<label class="f '+(cls||'')+'">'+l+(type==='ta'?'<textarea id="ct_'+k+'" data-chg="ct" data-f="'+k+'"'+dis+'>'+esc(d[k])+'</textarea>':'<input type="'+(type||'text')+'" id="ct_'+k+'"'+(type==='number'?' step="any"':'')+' value="'+esc(d[k]==null?'':d[k])+'" data-chg="ct" data-f="'+k+'"'+dis+(extra||'')+'>')+'</label>';
+  const fld=(k,l,cls,type,extra)=>'<label class="f '+(cls||'')+'">'+l+(type==='ta'?'<textarea id="ct_'+k+'" data-chg="ct" data-f="'+k+'"'+dis+'>'+esc(d[k])+'</textarea>':(type==='number'?'<input type="text" inputmode="decimal" autocomplete="off" data-num="1" id="ct_'+k+'" value="'+esc(dec(d[k]))+'" data-chg="ct" data-f="'+k+'"'+dis+(extra||'')+'>':'<input type="'+(type||'text')+'" id="ct_'+k+'" value="'+esc(d[k]==null?'':d[k])+'" data-chg="ct" data-f="'+k+'"'+dis+(extra||'')+'>'))+'</label>';
   const empOpts=(S.config&&S.config.empresas||[]);
   let out='<div class="head"><div><button class="btn ghost sm" data-act="nav" data-v="ct">← Contratos</button><h1 style="margin-top:6px">'+(d.id?esc(d.sigla+' — '+d.nome):'Novo contrato')+'</h1></div>'+(ed?'<div class="row"><button class="btn" data-act="nav" data-v="ct">Cancelar</button><button class="btn pri" data-act="salvarCt">Salvar contrato</button></div>':'')+'</div>';
   const crs=(S.config&&S.config.centros)||[];
@@ -433,13 +457,13 @@ function viewContratoEd(){
     '<div class="tbl" data-keep="cti"><table><thead><tr><th>Especialidade</th><th>Tipo / local</th><th>Unid. pagamento</th><th>Unid. faturamento</th><th class="n">Qtd contratada/mês</th><th class="n">Valor a faturar</th><th class="n">Valor a pagar</th><th>Fonte pagamento</th><th></th></tr></thead><tbody>'+
     (d.itens.length?d.itens.map((it,i)=>{const sel=(f,opts)=>'<select id="it'+i+f+'" data-chg="it" data-i="'+i+'" data-f="'+f+'"'+dis+'>'+opts.map(o=>'<option value="'+o[0]+'"'+(it[f]===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select>'; const U=Object.entries(UNIDADES);
       return '<tr><td><input type="text" id="it'+i+'esp" value="'+esc(it.especialidade)+'" data-chg="it" data-i="'+i+'" data-f="especialidade"'+dis+'></td><td><input type="text" id="it'+i+'tp" value="'+esc(it.tipo)+'" data-chg="it" data-i="'+i+'" data-f="tipo"'+dis+'></td><td>'+sel('unidadePag',U)+'</td><td>'+sel('unidadeFat',U)+'</td>'+
-        '<td class="n"><input type="number" step="any" id="it'+i+'q" value="'+(it.qtdMes||0)+'" data-chg="it" data-i="'+i+'" data-f="qtdMes"'+dis+'></td><td class="n"><input type="number" step="0.01" id="it'+i+'vf" value="'+(it.valorFaturar||0)+'" data-chg="it" data-i="'+i+'" data-f="valorFaturar"'+dis+(num(it.valorFaturar)?'':' style="border-color:var(--warn)"')+'></td><td class="n"><input type="number" step="any" id="it'+i+'vp" value="'+(it.valorPagar||0)+'" data-chg="it" data-i="'+i+'" data-f="valorPagar"'+dis+'></td>'+
+        '<td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'q" value="'+dec((it.qtdMes||0))+'" data-chg="it" data-i="'+i+'" data-f="qtdMes"'+dis+'></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'vf" value="'+dec((it.valorFaturar||0))+'" data-chg="it" data-i="'+i+'" data-f="valorFaturar"'+dis+(num(it.valorFaturar)?'':' style="border-color:var(--warn)"')+'></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'vp" value="'+dec((it.valorPagar||0))+'" data-chg="it" data-i="'+i+'" data-f="valorPagar"'+dis+'></td>'+
         '<td>'+sel('fontePag',[['cadastro','Cadastro'],['pega','Pega Plantão']])+'</td><td>'+(ed?'<button class="btn ghost sm" data-act="rmItem" data-i="'+i+'" aria-label="Remover item">✕</button>':'')+'</td></tr>';}).join(''):'<tr><td colspan="9" class="muted">Nenhum item. Adicione as especialidades e tipos do contrato.</td></tr>')+'</tbody></table></div></div>';
   const itOpts=sel=>'<option value="">Escolha…</option>'+d.itens.map(it=>'<option value="'+it.id+'"'+(sel===it.id?' selected':'')+'>'+esc(it.especialidade+' — '+it.tipo)+'</option>').join('');
   out+='<div class="card"><div class="row"><h2 class="grow">Vínculo com setores do Pega Plantão</h2></div><p class="muted">Define qual item do contrato recebe as horas de cada “Local | Setor” do relatório. É preenchido automaticamente na conferência.</p><div class="tbl"><table><thead><tr><th>Local | Setor</th><th>Item do contrato</th><th></th></tr></thead><tbody>'+
     (d.mapeamento.length?d.mapeamento.map((m,i)=>'<tr><td>'+esc(m.s)+'</td><td><select id="mpc'+i+'" data-chg="ctMap" data-i="'+i+'"'+dis+'>'+itOpts(m.item)+'<option value="__ignorar"'+(m.item==='__ignorar'?' selected':'')+'>Não faturar (ignorar)</option></select></td><td>'+(ed?'<button class="btn ghost sm" data-act="rmMap" data-i="'+i+'" aria-label="Remover vínculo">✕</button>':'')+'</td></tr>').join(''):'<tr><td colspan="3" class="muted">Sem vínculos ainda.</td></tr>')+'</tbody></table></div></div>';
   out+='<div class="card"><div class="row"><h2 class="grow">Valores diferenciados por médico</h2>'+(ed?'<button class="btn sm" data-act="addDif">Adicionar</button>':'')+'</div><p class="muted">Substitui o valor a pagar do item para o médico indicado.</p><div class="tbl"><table><thead><tr><th>CRM</th><th>Médico</th><th>Item</th><th class="n">Valor a pagar</th><th></th></tr></thead><tbody>'+
-    (d.diferenciados.length?d.diferenciados.map((x,i)=>'<tr><td><input type="text" id="df'+i+'c" value="'+esc(x.crm)+'" data-chg="dif" data-i="'+i+'" data-f="crm"'+dis+' style="min-width:90px"></td><td><input type="text" id="df'+i+'n" value="'+esc(x.nome||'')+'" data-chg="dif" data-i="'+i+'" data-f="nome"'+dis+'></td><td><select id="df'+i+'i" data-chg="dif" data-i="'+i+'" data-f="item"'+dis+'>'+itOpts(x.item)+'</select></td><td class="n"><input type="number" step="any" id="df'+i+'v" value="'+(x.valorPagar||0)+'" data-chg="dif" data-i="'+i+'" data-f="valorPagar"'+dis+'></td><td>'+(ed?'<button class="btn ghost sm" data-act="rmDif" data-i="'+i+'" aria-label="Remover">✕</button>':'')+'</td></tr>').join(''):'<tr><td colspan="5" class="muted">Nenhum valor diferenciado.</td></tr>')+'</tbody></table></div></div>';
+    (d.diferenciados.length?d.diferenciados.map((x,i)=>'<tr><td><input type="text" id="df'+i+'c" value="'+esc(x.crm)+'" data-chg="dif" data-i="'+i+'" data-f="crm"'+dis+' style="min-width:90px"></td><td><input type="text" id="df'+i+'n" value="'+esc(x.nome||'')+'" data-chg="dif" data-i="'+i+'" data-f="nome"'+dis+'></td><td><select id="df'+i+'i" data-chg="dif" data-i="'+i+'" data-f="item"'+dis+'>'+itOpts(x.item)+'</select></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="df'+i+'v" value="'+dec((x.valorPagar||0))+'" data-chg="dif" data-i="'+i+'" data-f="valorPagar"'+dis+'></td><td>'+(ed?'<button class="btn ghost sm" data-act="rmDif" data-i="'+i+'" aria-label="Remover">✕</button>':'')+'</td></tr>').join(''):'<tr><td colspan="5" class="muted">Nenhum valor diferenciado.</td></tr>')+'</tbody></table></div></div>';
   out+='<div class="card"><h2>Pedido de NF (PENF)</h2><div class="fields">'+fld('tomador','Tomador','w2')+fld('cnpj','CNPJ do tomador')+fld('endereco','Endereço','w2')+fld('municipio','Município')+fld('empenho','Empenho')+fld('parceiro','Parceiro (cód.)')+fld('codEmpresaFat','Empresas (cód. faturamento)')+fld('cidadeISS','Cidade ISS (cód.)')+fld('tipoOperacao','Tipo operação')+fld('produtoServico','Produto / serviço (cód.)')+
     fld('descricaoNF','Modelo da descrição dos serviços','wfull','ta')+'</div><p class="muted">Campos automáticos: {ESPECIALIDADES} {PERIODO} {COMPETENCIA} {QTD_TOTAL} {UNIDADE} {VALOR_UNITARIO} {VALOR_TOTAL} {ITENS} {CONTRATO}</p></div>';
   out+='<div class="card"><h2>Folha de pagamento / ERP</h2><div class="fields">'+fld('codEmpresaPagadora','Cód. empresa pagadora (padrão)')+
@@ -515,7 +539,7 @@ function viewModal(){
     return '<h2>'+esc(m.title)+'</h2><p>Repasse estes dados para <b>'+esc(m.nome)+'</b> por um canal seguro. A senha não será mostrada de novo; no primeiro acesso a pessoa define a própria senha.</p><div class="card" style="background:var(--sunken)"><div class="fields"><div><div class="eyebrow">E-mail</div><b>'+esc(m.email)+'</b></div><div><div class="eyebrow">Senha temporária</div><b class="mono" style="font-size:1.1rem">'+esc(m.senha)+'</b></div><div class="wfull"><div class="eyebrow">Endereço</div><span class="mono">'+esc(location.origin)+'</span></div></div></div><div class="row"><button class="btn" data-act="copiarSenha">Copiar dados</button><span class="grow"></span><button class="btn pri" data-act="modalClose">Pronto</button></div>';
   }
   if(m.type==='confirm'){
-    return '<h2>'+esc(m.title)+'</h2><p>'+esc(m.text)+'</p><div class="row"><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button><button class="btn '+(m.danger?'bad':'pri')+'" data-act="confirmOk">'+esc(m.ok)+'</button></div>';
+    return '<h2>'+esc(m.title)+'</h2><p>'+esc(m.text)+'</p>'+(m.motivo?'<label class="f">Motivo (obrigatório)<textarea id="cfMot" style="min-height:80px" placeholder="Explique por que está excluindo">'+esc(m.motivoTxt||'')+'</textarea></label>':'')+'<div class="row"><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button><button class="btn '+(m.danger?'bad':'pri')+'" data-act="confirmOk">'+esc(m.ok)+'</button></div>';
   }
   return '';
 }
@@ -630,7 +654,26 @@ function wbFolha(F,ct,f){
 }
 
 /* ================= AÇÕES ================= */
-function confirmar(title,text,ok,fn,danger){ S.modal={type:'confirm',title,text,ok,fn,danger}; render(); }
+async function excluirFechamento(f,motivo){
+  const ct=ctById(f.contratoId)||{}; const c=calcular(f,ct); const em=nowISO();
+  // registro permanente da exclusão (gravado antes de apagar)
+  const reg={tipo:'exclusao_fechamento',fechamentoId:f.id,contratoId:f.contratoId,contrato:(ct.sigla||'')+' — '+(ct.nome||''),competencia:f.competencia,status:(STATUS[statusDe(f)]||[''])[0],
+    arquivo:f.arquivo||'',faturamento:c.totais.totFat,pagamento:c.totais.totPag,horasApuradas:c.totais.apur,nfEmitida:!!(f.penf&&f.penf.emitidaEm),folhaGerada:!!(f.folha&&f.folha.geradaEm),motivo,por:S.uid,em};
+  const aid=em.replace(/[^0-9]/g,'')+'_'+Math.random().toString(36).slice(2,8);
+  await wr('auditoria/'+aid,()=>S.db.doc('auditoria/'+aid).set(reg));
+  for(let i=0;i<(f.chunks||0);i++){ const p='plantoes/'+f.id+'_'+i; await wr(p,()=>S.db.doc(p).delete()); }
+  if(f.aprovadoEm||f.status==='aprovado'||f.status==='concluido'){ await wr('congelados/'+f.id,()=>S.db.doc('congelados/'+f.id).delete()); await wr('folhas/'+f.id,()=>S.db.doc('folhas/'+f.id).delete()); }
+  await wr('fechamentos/'+f.id,()=>fechRef(f.id).delete());
+  if(S.fid===f.id){ S.v='fech'; S.fid=null; }
+  toast('Fechamento excluído e registrado.'); render();
+}
+function pedirExclusao(f){
+  if(!f) return; const ct=ctById(f.contratoId)||{}; const c=calcular(f,ct); const L=lock(f);
+  confirmar('Excluir o fechamento '+(ct.sigla||'')+' — '+compTxt(f.competencia)+'?',
+    'Remove a importação, conferência, ajustes e observações desta competência ('+fH(c.totais.apur)+' h apuradas, faturamento '+brl(c.totais.totFat)+').'+(L?' Este fechamento já foi aprovado'+((f.penf&&f.penf.emitidaEm)?', com pedido de NF emitido':'')+((f.folha&&f.folha.geradaEm)?' e folha gerada':'')+'.':'')+' A exclusão não pode ser desfeita e fica no registro de exclusões.',
+    'Excluir fechamento',mot=>excluirFechamento(f,mot).catch(e=>toast(errMsg(e),'bad')),true,true);
+}
+function confirmar(title,text,ok,fn,danger,motivo){ S.modal={type:'confirm',title,text,ok,fn,danger,motivo}; render(); if(motivo) setTimeout(()=>{ const el=$('#cfMot'); if(el) el.focus(); },0); }
 const ACT={
   async logout(){ if(window.__logout) await window.__logout(); },
   trocarSenha(){ if(window.__trocarSenha) window.__trocarSenha(); },
@@ -639,7 +682,9 @@ const ACT={
   nav(el){ S.v=el.dataset.v; if(el.dataset.ct) S.medCt=el.dataset.ct; S.modal=null; window.scrollTo(0,0); render(); },
   ovl(el,e){ if(e.target===el){ S.modal=null; render(); } },
   modalClose(){ S.modal=null; render(); },
-  confirmOk(){ const fn=S.modal&&S.modal.fn; S.modal=null; render(); fn&&fn(); },
+  confirmOk(){ const m=S.modal; if(!m) return; let mot='';
+    if(m.motivo){ const el=$('#cfMot'); mot=(el&&el.value||'').trim(); if(mot.length<5){ toast('Escreva o motivo (pelo menos 5 caracteres).','bad'); m.motivoTxt=mot; return; } }
+    const fn=m.fn; S.modal=null; render(); fn&&fn(mot); },
   openFech(el){ S.fid=el.dataset.id; S.v='fechDet'; S.tab='conf'; S.conf.open={}; S.devolver=''; window.scrollTo(0,0); render(); },
   novoFech(){ S.modal={type:'novo'}; render(); },
   async criarFech(){ const m=S.modal; const ct=ctById(m.ct); if(!ct||!m.parsed||!m.comp) return; S.busy=true; render();
@@ -662,9 +707,14 @@ const ACT={
   reabrir(){ const f=fechById(S.fid); confirmar('Reabrir o fechamento?','O relatório volta para conferência. O pedido de NF e a folha já emitidos são descartados e precisarão ser gerados de novo.','Reabrir',()=>{
       wr('congelados/'+f.id,()=>S.db.doc('congelados/'+f.id).delete()); wr('folhas/'+f.id,()=>S.db.doc('folhas/'+f.id).delete());
       updFech(f.id,{status:'conferencia',aprovadoEm:null,penf:null,folhaInfo:null,t:{...f.t,enviado:null,aprovado:null,nf:null,folha:null},eventos:evento(f,'reab','Fechamento reaberto (aprovação, NF e folha anteriores descartadas)')}); S.tab='conf'; },true); },
-  excluirFech(){ const f=fechById(S.fid); confirmar('Excluir este fechamento?','Remove a importação, ajustes e observações desta competência. Não pode ser desfeito.','Excluir',async()=>{
-      for(let i=0;i<(f.chunks||0);i++){ const p='plantoes/'+f.id+'_'+i; await wr(p,()=>S.db.doc(p).delete()); }
-      await wr('fechamentos/'+f.id,()=>fechRef(f.id).delete()); S.v='fech'; render(); },true); },
+  excluirFech(){ pedirExclusao(fechById(S.fid)); },
+  excluirFechLista(el){ pedirExclusao(fechById(el.dataset.id)); },
+  excluirLinha(el){ const f=fechById(S.fid); const ct=ctById(f.contratoId); const l=calcular(f,ct).linhas.find(x=>x.key===el.dataset.key); if(!l) return;
+    confirmar('Excluir esta linha do fechamento?',l.nome+' — '+l.esp+' · '+l.tipo+': '+fH(l.apur)+' h apuradas, pagamento '+brl(l.totPag)+', faturamento '+brl(l.totFat)+'. A linha sai dos totais, da NF e da folha deste mês e pode ser restaurada enquanto o fechamento não for aprovado.','Excluir linha',mot=>{
+      const reg={nome:l.nome,crm:l.crm,esp:l.esp,tipo:l.tipo,apur:l.apur,totPag:l.totPag,totFat:l.totFat,motivo:mot,por:S.uid,em:nowISO()};
+      updFech(f.id,{excluidos:{[l.key]:reg},eventos:evento(f,'excl','Linha excluída: '+l.nome+' ('+l.esp+' · '+l.tipo+', '+fH(l.apur)+' h, '+brl(l.totPag)+'). Motivo: '+mot)}); toast('Linha excluída.'); },true,true); },
+  restaurarLinha(el){ const f=fechById(S.fid); const k=el.dataset.key; const v=(f.excluidos||{})[k]||{};
+    updFech(f.id,{excluidos:{[k]:null},eventos:evento(f,'rest','Linha restaurada: '+(v.nome||k)+' ('+(v.esp||'')+' · '+(v.tipo||'')+')')}); toast('Linha restaurada.'); },
   penfReset(){ const f=fechById(S.fid); updFech(f.id,{penfRasc:null}); },
   emitirNF(){ const f=fechById(S.fid); const ct=ctById(f.contratoId); const c=calcular(f,ct); const P=penfDados(f,ct,c);
     confirmar('Emitir o pedido de NF?','Valor total '+brl(P.valor)+'. O pedido fica registrado e a planilha PENF é oferecida para download.','Emitir pedido',async()=>{
@@ -723,7 +773,7 @@ const CHG={
   penf(el){ const f=fechById(S.fid); updFech(f.id,{penfRasc:{[el.dataset.f]:el.value}}); },
   folhaP(el){ const f=fechById(S.fid); updFech(f.id,{folhaParams:{[el.dataset.f]:el.value}}); },
   folhaV(el){ const f=fechById(S.fid); updFech(f.id,{folhaParams:{[el.dataset.f]:{[el.dataset.k]:num(el.value)}}}); },
-  ct(el){ const f=el.dataset.f; S.draft[f]= el.type==='number'? num(el.value) : el.value;
+  ct(el){ const f=el.dataset.f; S.draft[f]= el.dataset.num? num(el.value) : el.value;
     if(f==='sigla'){ const c=((S.config&&S.config.centros)||[]).find(x=>normTxt(x.sigla)===normTxt(el.value)); const d=S.draft;
       if(c){ if(!d.centroResultado) d.centroResultado=String(c.codigo); if(!d.nome) d.nome=c.descricao; if(!d.numero&&c.contrato) d.numero=String(c.contrato); if(!d.ano&&c.ano) d.ano=String(c.ano).startsWith('/')?String(c.ano):'/'+c.ano; if(!d.empresa&&c.empresa){ d.empresa=c.empresa; const e=((S.config&&S.config.empresas)||[]).find(x=>normTxt(x.sigla)===normTxt(c.empresa)); if(e&&!d.codEmpresaPagadora) d.codEmpresaPagadora=e.cod; } } }
     if(f==='empresa'){ const e=((S.config&&S.config.empresas)||[]).find(x=>normTxt(x.sigla)===normTxt(el.value)); if(e&&!S.draft.codEmpresaPagadora) S.draft.codEmpresaPagadora=e.cod; } render(); },

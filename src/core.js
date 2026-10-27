@@ -5,8 +5,14 @@ const TIPO_PAG = {'SOCIO':'Honorários','RPA':'RPA','PJ':'PJ','PRO-LABORE':'Pró
 const NATUREZAS_PADRAO = {'Honorários':120101,'PJ':120102,'RPA':120103,'Pró-Labore':120104};
 
 function normTxt(s){return String(s==null?'':s).normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase().replace(/\s+/g,' ').trim();}
-function num(v){ if(v==null||v==='') return 0; if(typeof v==='number') return isFinite(v)?v:0; const s=String(v).trim(); if(!s) return 0;
-  const n = /,\d{1,}$/.test(s) ? parseFloat(s.replace(/\./g,'').replace(',','.')) : parseFloat(s.replace(/,/g,'')); return isFinite(n)?n:0; }
+/** Número a partir de 189,38 · 1.234,56 · R$ 1.234,56 · 1234.56 · 1,234.56 (o último separador é o decimal). */
+function num(v){ if(v==null||v==='') return 0; if(typeof v==='number') return isFinite(v)?v:0;
+  let s=String(v).replace(/[^\d,.\-]/g,''); if(!s) return 0;
+  const iv=s.lastIndexOf(','), ip=s.lastIndexOf('.');
+  if(iv>=0&&ip>=0){ s= iv>ip ? s.replace(/\./g,'').replace(',','.') : s.replace(/,/g,''); }
+  else if(iv>=0){ s= /,\d{3}$/.test(s)&&s.split(',').length>2 ? s.replace(/,/g,'') : s.replace(/,/g,'.'); }
+  else if(ip>=0&&/^-?\d{1,3}(\.\d{3})+$/.test(s)){ s=s.replace(/\./g,''); }
+  const n=parseFloat(s); return isFinite(n)?n:0; }
 function r2(n){return Math.round((n+(n>=0?1:-1)*1e-9)*100)/100;}
 function r4(n){return Math.round(n*10000)/10000;}
 function crmKey(crm){ const s=String(crm==null?'':crm).toUpperCase(); const m=s.match(/\d+/); if(!m) return ''; const d=m[0].replace(/^0+/,'')||'0'; const uf=(s.replace(/\d/g,'').match(/[A-Z]{2}/)||[''])[0]; return uf? d+'-'+uf : d; }
@@ -83,7 +89,7 @@ function calcular(fech, contrato){
   const itMap=Object.fromEntries(itens.map(i=>[i.id,i]));
   const map=Object.fromEntries((contrato&&contrato.mapeamento||[]).map(m=>[m.s,m.item]));
   const dif={}; for(const d of (contrato&&contrato.diferenciados||[])) if(d.crm&&d.item) dif[crmDigits(crmKey(d.crm))+'|'+d.item]=num(d.valorPagar);
-  const meds=fech.medicos||{}; const aj=fech.ajustes||{}; const conf=fech.conferidos||{};
+  const meds=fech.medicos||{}; const aj=fech.ajustes||{}; const conf=fech.conferidos||{}; const exc=fech.excluidos||{};
   const groups={}; const naoMap={};
   for(const b of (fech.base||[])){
     const it=map[b.s];
@@ -93,21 +99,22 @@ function calcular(fech, contrato){
     const g=groups[key]||(groups[key]={key,k:b.k,item:it,n:0,na:0,plan:0,real:0,apur:0,vApur:0});
     g.n+=b.n; g.na+=b.na; g.plan+=b.plan; g.real+=b.real; g.apur+=b.apur; g.vApur+=b.vApur;
   }
-  const linhas=Object.values(groups).map(g=>{
+  const linhas=Object.values(groups).filter(g=>!exc[g.key]).map(g=>{
     const item=itMap[g.item]; const a=aj[g.key]||{};
     const qPagBase=r4(baseQtd(item.unidadePag||'hora',g)), qFatBase=r4(baseQtd(item.unidadeFat||'hora',g));
     const qPag= a.qPag!=null? num(a.qPag) : qPagBase;
     const qFat= a.qFat!=null? num(a.qFat) : qFatBase;
     const d=dif[crmDigits(g.k)+'|'+g.item];
     let vPag = d!=null? d : num(item.valorPagar);
-    let totPag;
-    if(item.fontePag==='pega' && d==null){ vPag = g.apur? g.vApur/g.apur : 0; totPag = a.qPag!=null? r2(qPag*vPag) : r2(g.vApur); }
+    let totPag, pagPP=false;
+    // fonte "Pega Plantão", ou contrato sem valor a pagar: usa o valor/hora configurado no relatório
+    if(d==null && (item.fontePag==='pega' || (!vPag && g.vApur>0))){ pagPP=true; vPag = g.apur? g.vApur/g.apur : 0; totPag = a.qPag!=null? r2(qPag*vPag) : r2(g.vApur); }
     else totPag=r2(qPag*vPag);
     const vFat=num(item.valorFaturar); const totFat=r2(qFat*vFat);
     const m=meds[g.k]||{};
     return {key:g.key,k:g.k,nome:m.nome||g.k,crm:m.crm||g.k,itemId:g.item,esp:item.especialidade||'',tipo:item.tipo||'',
       uPag:item.unidadePag||'hora',uFat:item.unidadeFat||'hora',n:g.n,na:g.na,plan:r4(g.plan),real:r4(g.real),apur:r4(g.apur),
-      qPagBase,qFatBase,qPag:r4(qPag),qFat:r4(qFat),vPag:r4(vPag),vFat,totPag,totFat,difer:d!=null,
+      qPagBase,qFatBase,qPag:r4(qPag),qFat:r4(qFat),vPag:r4(vPag),vFat,totPag,totFat,difer:d!=null,pagPP,
       ajustado:a.qPag!=null||a.qFat!=null, just:a.just||'', conferido:!!conf[g.key]};
   }).sort((a,b)=>a.nome.localeCompare(b.nome,'pt-BR')||a.esp.localeCompare(b.esp,'pt-BR'));
   const porItem=itens.map(i=>({itemId:i.id,esp:i.especialidade||'',tipo:i.tipo||'',uPag:i.unidadePag||'hora',uFat:i.unidadeFat||'hora',
