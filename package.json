@@ -16,6 +16,7 @@
   "dependencies": {
     "@vercel/blob": "^2.8.2",
     "chart.js": "4.4.1",
+    "nodemailer": "^6.10.1",
     "xlsx": "0.18.5"
   },
   "devDependencies": {

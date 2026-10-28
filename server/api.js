@@ -187,7 +187,7 @@ async function auth(req, st) {
   if (a === 'status') {
     const users = await st.list('sys/users/');
     const ctx = await contexto(st, req);
-    return json({ temUsuarios: users.length > 0, logado: !!ctx, armazenamento: st.tipo, adminPorEmail: ADMIN_EMAILS().length > 0 });
+    return json({ temUsuarios: users.length > 0, logado: !!ctx, armazenamento: st.tipo, adminPorEmail: ADMIN_EMAILS().length > 0, email: emailConfigurado() });
   }
 
   if (a === 'setup') {
@@ -280,6 +280,28 @@ async function atualizarUsuario(st, id, fn) {
   });
 }
 
+/* =============================== E-MAIL ===============================
+ * Envio opcional por SMTP (ex.: Microsoft 365 smtp.office365.com:587, Gmail smtp.gmail.com:587).
+ * Variáveis: SMTP_HOST, SMTP_PORT (587), SMTP_USER, SMTP_PASS, SMTP_FROM (remetente), SMTP_SECURE ("true" para porta 465).
+ */
+// aceita também SMPT_HOST (erro de digitação comum ao cadastrar a variável)
+const smtpHost = () => process.env.SMTP_HOST || process.env.SMPT_HOST || '';
+const emailConfigurado = () => !!(smtpHost() && process.env.SMTP_FROM);
+let transporte = null;
+async function enviarEmail({ to, subject, text, replyTo }) {
+  if (!emailConfigurado()) throw new HttpErro(503, 'Envio de e-mail não configurado no servidor (variáveis SMTP_*).', 'no_email');
+  if (!transporte) {
+    const nm = (await import('nodemailer')).default;
+    const port = Number(process.env.SMTP_PORT || 587);
+    transporte = nm.createTransport({
+      host: smtpHost(), port,
+      secure: String(process.env.SMTP_SECURE || (port === 465)).toLowerCase() === 'true',
+      auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+    });
+  }
+  return transporte.sendMail({ from: process.env.SMTP_FROM, to, subject, text, replyTo });
+}
+
 /* ================================= DB ================================= */
 const LIMITE_RESPOSTA = 3_000_000; // ~3 MB por resposta (limite das Functions é 4,5 MB)
 
@@ -299,6 +321,16 @@ async function db(req, st) {
 
   const body = await req.json().catch(() => ({}));
   const op = body.op;
+
+  if (op === 'email') {
+    exigeAcesso(ctx);
+    const to = String(body.to || '').trim(); const subject = String(body.subject || '').slice(0, 300); const text = String(body.text || '').slice(0, 20000);
+    if (!/^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(to)) throw new HttpErro(400, 'E-mail do destinatário inválido.', 'invalid_argument');
+    if (!subject || !text) throw new HttpErro(400, 'Assunto e mensagem são obrigatórios.', 'invalid_argument');
+    try { await enviarEmail({ to, subject, text, replyTo: ctx.u.email }); }
+    catch (e) { if (e instanceof HttpErro) throw e; console.error(e); throw new HttpErro(502, 'O servidor de e-mail recusou o envio: ' + (e.message || e), 'unavailable'); }
+    return json({ ok: true });
+  }
 
   if (op === 'get' || op === 'getMany') {
     exigeLogin(ctx);

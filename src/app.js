@@ -1,4 +1,4 @@
-import {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, brl, qtdTxt, periodoTxt, descricaoNF} from './core.js';
+import {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, retencoesNF, RETENCOES_PADRAO, brl, qtdTxt, periodoTxt, descricaoNF} from './core.js';
 
 /* ============================================================
    APP
@@ -7,20 +7,20 @@ const PERMS=[
   ['dashboard','Ver dashboard gerencial'],['fechamentos','Ver fechamentos'],['importar','Importar relatório Pega Plantão'],
   ['conferir','Conferir e ajustar quantidades'],['aprovar','Aprovar ou devolver fechamento'],['emitir_nf','Emitir pedido de NF'],
   ['gerar_folha','Gerar folha de pagamento'],['observacoes','Registrar observações'],['contratos','Cadastrar contratos'],
-  ['medicos','Cadastrar médicos'],['reabrir','Reabrir fechamento aprovado'],['excluir','Excluir fechamentos e linhas de médico'],['admin','Administrar usuários e parâmetros']];
+  ['medicos','Cadastrar médicos'],['reabrir','Reabrir fechamento aprovado'],['excluir','Excluir fechamentos e linhas de médico'],['emails','Enviar e-mails aos médicos'],['admin','Administrar usuários e parâmetros']];
 const ALL=Object.fromEntries(PERMS.map(p=>[p[0],true]));
 const PERFIS={
   admin:{label:'Administrador',perms:ALL},
-  faturamento:{label:'Faturamento',perms:{dashboard:1,fechamentos:1,importar:1,conferir:1,emitir_nf:1,observacoes:1,contratos:1,medicos:1,excluir:1}},
+  faturamento:{label:'Faturamento',perms:{dashboard:1,fechamentos:1,importar:1,conferir:1,emitir_nf:1,observacoes:1,contratos:1,medicos:1,excluir:1,emails:1}},
   aprovador:{label:'Aprovador',perms:{dashboard:1,fechamentos:1,aprovar:1,observacoes:1}},
-  folha:{label:'Folha / Financeiro',perms:{dashboard:1,fechamentos:1,gerar_folha:1,medicos:1,observacoes:1}},
+  folha:{label:'Folha / Financeiro',perms:{dashboard:1,fechamentos:1,gerar_folha:1,medicos:1,observacoes:1,emails:1}},
   consulta:{label:'Consulta',perms:{dashboard:1,fechamentos:1}}
 };
 const STATUS={conferencia:['Em conferência','p-info'],aguardando:['Aguardando aprovação','p-warn'],aprovado:['Aprovado · travado','p-acc'],concluido:['Concluído','p-ok']};
 const MESES=['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
 
 const S={boot:'loading',db:null,U:null,DL:null,me:null,owner:false,uid:null,
-  contratos:null,auditoria:[],fechs:null,fechsRaw:null,cong:{},folhas:{},usuarios:[],config:null,medicos:{},prof:{},
+  contratos:null,auditoria:[],metaOpen:{},fechs:null,fechsRaw:null,cong:{},folhas:{},usuarios:[],config:null,medicos:{},prof:{},
   v:'dash',fid:null,tab:'conf',modal:null,toast:null,draft:null,
   dash:{ct:'',comp:'',andamento:false},conf:{modo:'medico',q:'',open:{}},medCt:'',medQ:'',shifts:{},userHits:[],busy:false,obsDraft:{},devolver:''};
 
@@ -299,8 +299,22 @@ function tabConf(f,ct,c){
       c.naoMapeados.map((m,i)=>'<tr><td>'+esc(m.s)+'</td><td class="n">'+m.n+'</td><td><select id="mp'+i+'" data-chg="mapFech" data-s="'+esc(m.s)+'"'+((can('conferir')||can('contratos'))&&!L?'':' disabled')+'><option value="">Escolha…</option>'+itens.map(it=>'<option value="'+it.id+'"'+(sugerirItem(m.s,itens)===it.id?' data-sug="1"':'')+'>'+esc(it.especialidade+' — '+it.tipo)+'</option>').join('')+'<option value="__ignorar">Não faturar (ignorar)</option></select></td></tr>').join('')+
       '</tbody></table></div>'+(itens.length?'':'<p class="muted">O contrato ainda não tem itens. Cadastre especialidades e tipos em Contratos.</p>')+'</div>';
   }
-  if(!L){ const usados=new Set(c.linhas.map(l=>l.itemId)); const semV=(ct.itens||[]).filter(i=>usados.has(i.id)&&(!num(i.valorFaturar)||(!num(i.valorPagar)&&i.fontePag!=='pega')));
-    if(semV.length) out+='<div class="banner warn"><div class="grow"><b>'+semV.length+' item(ns) do contrato sem valor cadastrado.</b> '+semV.slice(0,4).map(i=>esc(i.especialidade+' · '+i.tipo)+' ('+[!num(i.valorPagar)&&i.fontePag!=='pega'?'a pagar':'',!num(i.valorFaturar)?'a faturar':''].filter(Boolean).join(' e ')+')').join('; ')+(semV.length>4?' e mais '+(semV.length-4):'')+'. Sem valor a pagar, o sistema usa o valor/hora configurado no Pega Plantão (marcado PP).</div>'+(can('contratos')?'<button class="btn sm" data-act="editCt" data-id="'+esc(ct.id)+'">Abrir contrato</button>':'')+'</div>'; }
+  if(!L){
+    // itens com linhas sem valor a pagar ou a faturar (considera o valor que de fato ficou na linha)
+    const semIds=new Set(c.linhas.filter(l=>!l.vPag||!l.vFat).map(l=>l.itemId));
+    const semV=(ct.itens||[]).filter(i=>semIds.has(i.id));
+    if(semV.length){ const edCt=can('contratos');
+      out+='<div class="card" style="border-color:var(--warn);background:var(--warn-soft)"><div class="row"><div class="grow"><b style="color:var(--warn)">'+semV.length+' item(ns) do contrato sem valor a pagar ou a faturar</b><div class="muted" style="font-size:.86rem">'+(edCt?'Informe os valores abaixo: eles são gravados no contrato e o fechamento é recalculado na hora.':'Peça a quem cadastra contratos para informar os valores.')+' O relatório do Pega Plantão não trouxe valor/hora para estas linhas.</div></div>'+(edCt?'<button class="btn sm" data-act="editCt" data-id="'+esc(ct.id)+'">Abrir contrato completo</button>':'')+'</div>'+
+        '<div class="tbl" style="margin-top:10px"><table><thead><tr><th>Especialidade · tipo/local</th><th>Unidade</th><th class="n">Valor a pagar (R$)</th><th class="n">Valor a faturar (R$)</th></tr></thead><tbody>'+
+        semV.map(i=>'<tr><td>'+esc(i.especialidade+' · '+i.tipo)+'</td><td>'+esc(UNIDADES[i.unidadePag||'hora'])+' / '+esc(UNIDADES[i.unidadeFat||'hora'])+'</td>'+
+          '<td class="n">'+(edCt?'<input type="text" inputmode="decimal" autocomplete="off" id="iv_p_'+esc(i.id)+'" value="'+dec(num(i.valorPagar)||'')+'" placeholder="0,00" data-chg="itemValor" data-item="'+esc(i.id)+'" data-f="valorPagar">':brl(num(i.valorPagar)))+'</td>'+
+          '<td class="n">'+(edCt?'<input type="text" inputmode="decimal" autocomplete="off" id="iv_f_'+esc(i.id)+'" value="'+dec(num(i.valorFaturar)||'')+'" placeholder="0,00" data-chg="itemValor" data-item="'+esc(i.id)+'" data-f="valorFaturar">':brl(num(i.valorFaturar)))+'</td></tr>').join('')+
+        '</tbody></table></div></div>'; }
+  }
+  { const temMetas=(ct.itens||[]).some(i=>i.metas&&['minima','mediana','maxima'].some(m=>i.metas[m]&&(num(i.metas[m].valorFaturar)||num(i.metas[m].valorPagar))));
+    const metaAtual=(L&&f.congelado&&f.congelado.meta!=null)?f.congelado.meta:(f.meta||''); const pode=!L&&can('conferir');
+    out+='<div class="card row" style="padding:12px 16px"><div class="grow"><b>Meta do fechamento</b><div class="muted" style="font-size:.84rem">'+(temMetas?'Define quais valores a faturar e a pagar do contrato entram no cálculo.':'Este contrato ainda não tem valores por meta. Cadastre em Contratos › Metas.')+'</div></div><div class="seg" role="group" aria-label="Meta do fechamento">'+
+      [['','Valores padrão'],['minima','Mínima'],['mediana','Mediana'],['maxima','Máxima']].map(([m,lab])=>'<button data-act="setMeta" data-m="'+m+'" aria-pressed="'+(metaAtual===m)+'"'+(pode&&(temMetas||!m)?'':' disabled')+'>'+lab+'</button>').join('')+'</div></div>'; }
   const q=normTxt(S.conf.q);
   const linhas=c.linhas.filter(l=>!q||normTxt(l.nome+' '+l.crm+' '+l.esp+' '+l.tipo).includes(q));
   out+='<div class="row"><div class="tabs" style="border:0"><button data-act="confModo" data-m="medico" aria-selected="'+(S.conf.modo==='medico')+'">Por médico</button><button data-act="confModo" data-m="item" aria-selected="'+(S.conf.modo==='item')+'">Por especialidade e tipo</button></div><span class="grow"></span>'+
@@ -316,9 +330,9 @@ function tabConf(f,ct,c){
     const podeExcl=ed&&can('excluir');
     out+='<div class="tbl fix" data-keep="tm"><table><thead><tr><th></th><th>Médico</th><th>CRM</th><th>Especialidade · tipo</th><th class="n">Plant.</th><th class="n">Planejadas</th><th class="n">Realizadas</th><th class="n">Apuradas</th><th class="n">Qtd pagar</th><th class="n">Valor pagar</th><th class="n">Pagamento</th><th class="n">Qtd faturar</th><th class="n">Valor faturar</th><th class="n">Faturamento</th><th>Justificativa</th><th>Conferido</th></tr></thead><tbody>'+
       linhas.map((l,i)=>{ const id=safeKey(l.key);
-        const row='<tr class="'+(l.ajustado?'adj':'')+'"><td style="white-space:nowrap">'+(podeExcl?'<button class="btn ghost sm del" data-act="excluirLinha" data-key="'+esc(l.key)+'" title="Excluir esta linha do fechamento" aria-label="Excluir linha de '+esc(l.nome)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>':'')+'<button class="btn ghost sm" data-act="expand" data-key="'+esc(l.key)+'" aria-label="Ver plantões">'+(S.conf.open[l.key]?'▾':'▸')+'</button></td><td>'+esc(l.nome)+'</td><td class="mono">'+esc(l.crm)+'</td><td>'+esc(l.esp)+' <span class="muted">· '+esc(l.tipo)+'</span></td><td class="n">'+l.n+'</td><td class="n">'+fH(l.plan)+'</td><td class="n">'+fH(l.real)+'</td><td class="n"><b>'+fH(l.apur)+'</b></td>'+
+        const row='<tr class="'+(l.ajustado?'adj':'')+'"><td style="white-space:nowrap">'+(podeExcl?'<button class="btn ghost sm del" data-act="excluirLinha" data-key="'+esc(l.key)+'" title="Excluir esta linha do fechamento" aria-label="Excluir linha de '+esc(l.nome)+'"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14M10 11v6M14 11v6"/></svg></button>':'')+(i===0||linhas[i-1].k!==l.k?botoesEmail(f,ct,l.k):'')+'<button class="btn ghost sm" data-act="expand" data-key="'+esc(l.key)+'" aria-label="Ver plantões">'+(S.conf.open[l.key]?'▾':'▸')+'</button></td><td>'+esc(l.nome)+'</td><td class="mono">'+esc(l.crm)+'</td><td>'+esc(l.esp)+' <span class="muted">· '+esc(l.tipo)+'</span></td><td class="n">'+l.n+'</td><td class="n">'+fH(l.plan)+'</td><td class="n">'+fH(l.real)+'</td><td class="n"><b>'+fH(l.apur)+'</b></td>'+
           '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="qp_'+id+'" value="'+dec(l.qPag)+'" data-chg="aj" data-key="'+esc(l.key)+'" data-f="qPag" data-base="'+l.qPagBase+'">':fH(l.qPag))+' <span class="muted">'+UNIDADES[l.uPag]+'</span></td>'+
-          '<td class="n">'+brl(l.vPag)+(l.difer?' <span class="tag">dif.</span>':'')+(l.pagPP?' <span class="tag" title="Valor/hora configurado no Pega Plantão">PP</span>':'')+(!l.vPag?' <span class="tag bad">sem valor</span>':'')+'</td><td class="n">'+brl(l.totPag)+'</td>'+
+          '<td class="n">'+brl(l.vPag)+(l.difer?' <span class="tag">dif.</span>':'')+(l.pagPP?' <span class="tag" title="Valor/hora configurado no Pega Plantão">PP</span>':'')+(!l.vPag?' <span class="tag bad" title="Contrato sem valor a pagar e relatório do Pega Plantão sem valor/hora">sem valor</span>':'')+'</td><td class="n">'+brl(l.totPag)+'</td>'+
           '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="qf_'+id+'" value="'+dec(l.qFat)+'" data-chg="aj" data-key="'+esc(l.key)+'" data-f="qFat" data-base="'+l.qFatBase+'">':fH(l.qFat))+' <span class="muted">'+UNIDADES[l.uFat]+'</span></td><td class="n">'+brl(l.vFat)+(!l.vFat?' <span class="tag bad">sem valor</span>':'')+'</td><td class="n">'+brl(l.totFat)+'</td>'+
           '<td>'+(ed&&l.ajustado?'<input type="text" id="js_'+id+'" value="'+esc(l.just)+'" placeholder="Motivo do ajuste" data-chg="ajJust" data-key="'+esc(l.key)+'">':esc(l.just))+(l.ajustado&&!l.just?' <span class="tag bad">sem justificativa</span>':'')+'</td>'+
           '<td><input type="checkbox" id="cf_'+id+'" data-chg="conf" data-key="'+esc(l.key)+'"'+(l.conferido?' checked':'')+(ed?'':' disabled')+' aria-label="Conferido"></td></tr>';
@@ -408,10 +422,10 @@ function tabFolha(f,ct,c){
   out+='<div class="card"><div class="fields"><label class="f">Contrato<input type="text" value="'+esc((ct.numero||'')+(ct.ano||'')+' '+(ct.sigla||''))+'" readonly></label><label class="f">Empresa<input type="text" value="'+esc(ct.empresa||'')+'" readonly></label><label class="f">Período de ref.<input type="text" value="'+mmYY(f.competencia).mm+'/'+mmYY(f.competencia).yy+'" readonly></label>'+
     '<label class="f">Responsável<input type="text" id="flResp" value="'+esc(F.responsavel)+'" data-chg="folhaP" data-f="responsavel"'+(ed?'':' disabled')+'></label><label class="f">Número documento<input type="text" value="'+esc(F.numeroDoc)+'" readonly class="mono"></label><label class="f">Centro de resultados<input type="text" value="'+esc(ct.centroResultado||'')+'" readonly></label><label class="f">Cód. reduzido contrato<input type="text" value="'+esc(F.codReduzido)+'" readonly></label>'+
     '<label class="f">Data de vencimento<input type="date" id="flVcto" value="'+esc(F.dataVcto)+'" data-chg="folhaP" data-f="dataVcto"'+(ed?'':' disabled')+'></label></div></div>';
-  out+='<div class="tbl fix" data-keep="tf"><table><thead><tr><th>CRM</th><th>Nome</th><th class="n">Horas</th><th class="n">Total realizado</th><th class="n">Desconto PN</th><th class="n">A receber</th><th class="n">Retenções</th><th class="n">Taxa sócio</th><th class="n">Líquido</th><th>Vínculo</th><th>Tipo pgto.</th><th>Empresa pagadora</th><th>Cód.</th><th>CPF/CNPJ conta</th><th>Empresa PJ</th><th>Alertas</th></tr></thead><tbody>'+
-    F.rows.map(r=>{const id=safeKey(r.k); return '<tr><td class="mono">'+esc(r.crm)+'</td><td>'+esc(r.nome)+'</td><td class="n">'+fH(r.horas)+'</td><td class="n">'+fN(r.total)+'</td>'+
+  out+='<div class="tbl fix" data-keep="tf"><table><thead><tr><th></th><th>CRM</th><th>Nome</th><th class="n">Horas</th><th class="n">Total realizado</th><th class="n">Desconto PN</th><th class="n">A receber</th><th class="n">Retenções</th><th class="n">Taxa sócio</th><th class="n">Líquido</th><th>Vínculo</th><th>Tipo pgto.</th><th>Empresa pagadora</th><th>Cód.</th><th>CPF/CNPJ conta</th><th>Empresa PJ</th><th>Alertas</th></tr></thead><tbody>'+
+    F.rows.map(r=>{const id=safeKey(r.k); return '<tr><td style="white-space:nowrap">'+botoesEmail(f,ct,r.k)+'</td><td class="mono">'+esc(r.crm)+'</td><td>'+esc(r.nome)+'</td><td class="n">'+fH(r.horas)+'</td><td class="n">'+fN(r.total)+'</td>'+
       '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="fpn_'+id+'" value="'+dec((r.pn||''))+'" placeholder="0,00" data-chg="folhaV" data-k="'+esc(r.k)+'" data-f="pn">':fN(r.pn))+'</td><td class="n">'+fN(r.aReceber)+'</td>'+
-      '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="frt_'+id+'" value="'+dec((r.ret||''))+'" placeholder="0,00" data-chg="folhaV" data-k="'+esc(r.k)+'" data-f="ret">':fN(r.ret))+'</td><td class="n">'+fN(r.taxa)+'</td><td class="n"><b>'+fN(r.liq)+'</b></td>'+
+      '<td class="n">'+(ed?'<input type="text" inputmode="decimal" autocomplete="off" id="frt_'+id+'" value="'+(r.retManual?dec(r.ret):'')+'" placeholder="'+(r.retAuto?fN(r.retAuto.total):'0,00')+'" title="'+(r.retAuto?'Automático (PJ não optante do Simples): PIS, COFINS, CSLL e IR. Digite para substituir.':'')+'" data-chg="folhaV" data-k="'+esc(r.k)+'" data-f="ret">':fN(r.ret))+(r.retAuto&&!r.retManual?' <span class="tag" title="PIS+COFINS+CSLL+IR">auto</span>':'')+'</td><td class="n">'+fN(r.taxa)+'</td><td class="n"><b>'+fN(r.liq)+'</b></td>'+
       '<td>'+esc(r.vinculo)+'</td><td>'+esc(r.tipoPag)+' <span class="muted mono">'+esc(r.natureza)+'</span></td><td>'+esc(r.empresa)+'</td><td class="mono">'+esc(r.codEmpresa)+'</td><td class="mono">'+esc(r.cpfConta)+'</td><td>'+esc(r.empresaPJ)+'</td><td>'+r.alertas.map(a=>'<span class="tag '+a.c+'">'+esc(a.t)+'</span>').join(' ')+'</td></tr>';}).join('')+
     '</tbody><tfoot><tr><td colspan="2">Total ('+F.rows.length+' médicos)</td><td class="n">'+fH(F.tot.horas)+'</td><td class="n">'+fN(F.tot.total)+'</td><td class="n">'+fN(F.tot.pn)+'</td><td class="n">'+fN(F.tot.aReceber)+'</td><td class="n">'+fN(F.tot.ret)+'</td><td class="n">'+fN(F.tot.taxa)+'</td><td class="n">'+fN(F.tot.liq)+'</td><td colspan="7"></td></tr></tfoot></table></div>';
   const prova=r2(F.tot.total-c.totais.totPag);
@@ -454,11 +468,12 @@ function viewContratoEd(){
     fld('responsavel','Responsável pelo fechamento')+fld('vigIni','Início da vigência','','date')+fld('vigFim','Fim da vigência','','date')+fld('valorGlobal','Valor global do contrato (R$)','','number')+fld('qtdGlobal','Quantidade global (h/unid.)','','number')+fld('ufCrm','UF padrão do CRM')+
     '<label class="f chk"><input type="checkbox" id="ct_ativo" data-chg="ctChk" data-f="ativo"'+(d.ativo!==false?' checked':'')+dis+'> Contrato ativo</label></div></div>';
   out+='<div class="card"><div class="row"><h2 class="grow">Especialidades, tipos e valores</h2>'+(ed?'<button class="btn sm" data-act="addItem">Adicionar item</button>':'')+'</div><p class="muted">Cada item é uma especialidade + tipo/local com sua unidade de medida para pagamento e faturamento. Fonte “Pega Plantão” usa o valor/hora configurado no relatório para o pagamento.</p>'+
-    '<div class="tbl" data-keep="cti"><table><thead><tr><th>Especialidade</th><th>Tipo / local</th><th>Unid. pagamento</th><th>Unid. faturamento</th><th class="n">Qtd contratada/mês</th><th class="n">Valor a faturar</th><th class="n">Valor a pagar</th><th>Fonte pagamento</th><th></th></tr></thead><tbody>'+
+    '<div class="tbl" data-keep="cti"><table><thead><tr><th>Especialidade</th><th>Metas</th><th>Tipo / local</th><th>Unid. pagamento</th><th>Unid. faturamento</th><th class="n">Qtd contratada/mês</th><th class="n">Valor a faturar</th><th class="n">Valor a pagar</th><th>Fonte pagamento</th><th></th></tr></thead><tbody>'+
     (d.itens.length?d.itens.map((it,i)=>{const sel=(f,opts)=>'<select id="it'+i+f+'" data-chg="it" data-i="'+i+'" data-f="'+f+'"'+dis+'>'+opts.map(o=>'<option value="'+o[0]+'"'+(it[f]===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select>'; const U=Object.entries(UNIDADES);
-      return '<tr><td><input type="text" id="it'+i+'esp" value="'+esc(it.especialidade)+'" data-chg="it" data-i="'+i+'" data-f="especialidade"'+dis+'></td><td><input type="text" id="it'+i+'tp" value="'+esc(it.tipo)+'" data-chg="it" data-i="'+i+'" data-f="tipo"'+dis+'></td><td>'+sel('unidadePag',U)+'</td><td>'+sel('unidadeFat',U)+'</td>'+
+      return '<tr><td><input type="text" id="it'+i+'esp" value="'+esc(it.especialidade)+'" data-chg="it" data-i="'+i+'" data-f="especialidade"'+dis+'></td><td>'+(()=>{const n=['minima','mediana','maxima'].filter(m=>it.metas&&it.metas[m]&&(num(it.metas[m].valorFaturar)||num(it.metas[m].valorPagar))).length; return '<button class="btn sm" data-act="toggleMetas" data-i="'+i+'" aria-expanded="'+!!S.metaOpen[i]+'">'+(n?n+' meta'+(n>1?'s':''):'Definir')+' '+(S.metaOpen[i]?'▾':'▸')+'</button>';})()+'</td><td><input type="text" id="it'+i+'tp" value="'+esc(it.tipo)+'" data-chg="it" data-i="'+i+'" data-f="tipo"'+dis+'></td><td>'+sel('unidadePag',U)+'</td><td>'+sel('unidadeFat',U)+'</td>'+
         '<td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'q" value="'+dec((it.qtdMes||0))+'" data-chg="it" data-i="'+i+'" data-f="qtdMes"'+dis+'></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'vf" value="'+dec((it.valorFaturar||0))+'" data-chg="it" data-i="'+i+'" data-f="valorFaturar"'+dis+(num(it.valorFaturar)?'':' style="border-color:var(--warn)"')+'></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'vp" value="'+dec((it.valorPagar||0))+'" data-chg="it" data-i="'+i+'" data-f="valorPagar"'+dis+'></td>'+
-        '<td>'+sel('fontePag',[['cadastro','Cadastro'],['pega','Pega Plantão']])+'</td><td>'+(ed?'<button class="btn ghost sm" data-act="rmItem" data-i="'+i+'" aria-label="Remover item">✕</button>':'')+'</td></tr>';}).join(''):'<tr><td colspan="9" class="muted">Nenhum item. Adicione as especialidades e tipos do contrato.</td></tr>')+'</tbody></table></div></div>';
+        '<td>'+sel('fontePag',[['cadastro','Cadastro'],['pega','Pega Plantão']])+'</td><td>'+(ed?'<button class="btn ghost sm" data-act="rmItem" data-i="'+i+'" aria-label="Remover item">✕</button>':'')+'</td></tr>'+
+        (S.metaOpen[i]?'<tr class="metas"><td></td><td colspan="9"><div class="fields" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))">'+[['minima','Mínima'],['mediana','Mediana'],['maxima','Máxima']].map(([m,lab])=>['valorFaturar','valorPagar'].map(fl=>'<label class="f">'+lab+' — '+(fl==='valorFaturar'?'a faturar':'a pagar')+' (R$)<input type="text" inputmode="decimal" autocomplete="off" id="mt'+i+m+fl+'" value="'+dec((it.metas&&it.metas[m]&&num(it.metas[m][fl]))||'')+'" placeholder="'+dec(num(it[fl])||'')+'" data-chg="itMeta" data-i="'+i+'" data-m="'+m+'" data-f="'+fl+'"'+dis+'></label>').join('')).join('')+'</div><p class="muted" style="margin:6px 0 0;font-size:.8rem">Valores por unidade usados quando o fechamento estiver na meta correspondente. Em branco = usa o valor padrão do item.</p></td></tr>':'');}).join(''):'<tr><td colspan="10" class="muted">Nenhum item. Adicione as especialidades e tipos do contrato.</td></tr>')+'</tbody></table></div></div>';
   const itOpts=sel=>'<option value="">Escolha…</option>'+d.itens.map(it=>'<option value="'+it.id+'"'+(sel===it.id?' selected':'')+'>'+esc(it.especialidade+' — '+it.tipo)+'</option>').join('');
   out+='<div class="card"><div class="row"><h2 class="grow">Vínculo com setores do Pega Plantão</h2></div><p class="muted">Define qual item do contrato recebe as horas de cada “Local | Setor” do relatório. É preenchido automaticamente na conferência.</p><div class="tbl"><table><thead><tr><th>Local | Setor</th><th>Item do contrato</th><th></th></tr></thead><tbody>'+
     (d.mapeamento.length?d.mapeamento.map((m,i)=>'<tr><td>'+esc(m.s)+'</td><td><select id="mpc'+i+'" data-chg="ctMap" data-i="'+i+'"'+dis+'>'+itOpts(m.item)+'<option value="__ignorar"'+(m.item==='__ignorar'?' selected':'')+'>Não faturar (ignorar)</option></select></td><td>'+(ed?'<button class="btn ghost sm" data-act="rmMap" data-i="'+i+'" aria-label="Remover vínculo">✕</button>':'')+'</td></tr>').join(''):'<tr><td colspan="3" class="muted">Sem vínculos ainda.</td></tr>')+'</tbody></table></div></div>';
@@ -466,6 +481,7 @@ function viewContratoEd(){
     (d.diferenciados.length?d.diferenciados.map((x,i)=>'<tr><td><input type="text" id="df'+i+'c" value="'+esc(x.crm)+'" data-chg="dif" data-i="'+i+'" data-f="crm"'+dis+' style="min-width:90px"></td><td><input type="text" id="df'+i+'n" value="'+esc(x.nome||'')+'" data-chg="dif" data-i="'+i+'" data-f="nome"'+dis+'></td><td><select id="df'+i+'i" data-chg="dif" data-i="'+i+'" data-f="item"'+dis+'>'+itOpts(x.item)+'</select></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="df'+i+'v" value="'+dec((x.valorPagar||0))+'" data-chg="dif" data-i="'+i+'" data-f="valorPagar"'+dis+'></td><td>'+(ed?'<button class="btn ghost sm" data-act="rmDif" data-i="'+i+'" aria-label="Remover">✕</button>':'')+'</td></tr>').join(''):'<tr><td colspan="5" class="muted">Nenhum valor diferenciado.</td></tr>')+'</tbody></table></div></div>';
   out+='<div class="card"><h2>Pedido de NF (PENF)</h2><div class="fields">'+fld('tomador','Tomador','w2')+fld('cnpj','CNPJ do tomador')+fld('endereco','Endereço','w2')+fld('municipio','Município')+fld('empenho','Empenho')+fld('parceiro','Parceiro (cód.)')+fld('codEmpresaFat','Empresas (cód. faturamento)')+fld('cidadeISS','Cidade ISS (cód.)')+fld('tipoOperacao','Tipo operação')+fld('produtoServico','Produto / serviço (cód.)')+
     fld('descricaoNF','Modelo da descrição dos serviços','wfull','ta')+'</div><p class="muted">Campos automáticos: {ESPECIALIDADES} {PERIODO} {COMPETENCIA} {QTD_TOTAL} {UNIDADE} {VALOR_UNITARIO} {VALOR_TOTAL} {ITENS} {CONTRATO}</p></div>';
+  out+='<div class="card"><h2>Solicitação de NF aos médicos PJ</h2><p class="muted" style="margin-top:0">Usado no e-mail “Solicitar NF”. Razão social, CNPJ, endereço e município do tomador vêm do bloco acima.</p><div class="fields">'+fld('cep','CEP do tomador')+fld('localPrestacao','Local e município da prestação','w2')+fld('diaLimiteNF','Dia limite para envio da NF (mês seguinte)','','number')+fld('discriminacaoPJ','Discriminação dos serviços','wfull','ta')+'</div></div>';
   out+='<div class="card"><h2>Folha de pagamento / ERP</h2><div class="fields">'+fld('codEmpresaPagadora','Cód. empresa pagadora (padrão)')+
     '<label class="f">Vínculo padrão<select id="ct_vinculoPadrao" data-chg="ct" data-f="vinculoPadrao"'+dis+'>'+VINCULOS.map(v=>'<option'+(d.vinculoPadrao===v?' selected':'')+'>'+v+'</option>').join('')+'</select></label>'+
     fld('taxaSocio','Taxa de sócio (R$)','','number')+fld('taxaSocioMinHoras','Cobrar taxa acima de (h)','','number')+fld('alertaValor','Alerta de valor acima de (R$)','','number')+'</div><p class="muted">Nº documento = nº do contrato + MM + AA. Cód. reduzido = sigla do CR + MM + AA. Vencimento padrão: último dia do mês seguinte à competência.</p></div>';
@@ -486,10 +502,10 @@ function viewMedicos(){
   if(!Object.keys(lista).length) return head+emptyState('Nenhum médico neste contrato','Importe um relatório do Pega Plantão ou a planilha “Base Médicos” do fechamento (colunas CRM, Nome Completo, CPF/CNPJ titular conta, Vínculo, Empresa pagadora…).');
   const dis=ed?'':' disabled';
   const inp=(k,f,w)=>'<input type="text" id="md_'+safeKey(k)+'_'+f+'" value="'+esc(lista[k][f]||'')+'" data-chg="med" data-k="'+esc(k)+'" data-f="'+f+'"'+dis+(w?' style="min-width:'+w+'px"':'')+'>';
-  return head+'<div class="row"><input type="search" id="medQ" placeholder="Buscar por nome, CRM ou CPF" data-inp="medQ" style="max-width:320px"><span class="muted">'+ks.length+' médico(s)</span></div><div class="tbl" data-keep="tmed"><table><thead><tr><th>CRM</th><th>Nome</th><th>Vínculo</th><th>Empresa pagadora</th><th>CPF/CNPJ titular conta</th><th>Empresa PJ</th><th>Formalização</th><th>E-mail NF</th><th>Contato</th><th>Observações</th><th>Ativo</th></tr></thead><tbody>'+
+  return head+'<div class="row"><input type="search" id="medQ" placeholder="Buscar por nome, CRM ou CPF" data-inp="medQ" style="max-width:320px"><span class="muted">'+ks.length+' médico(s)</span></div><div class="tbl fix" data-keep="tmed"><table><thead><tr><th>CRM</th><th>Nome</th><th>Vínculo</th><th>Empresa pagadora</th><th>CPF/CNPJ titular conta</th><th>Empresa PJ</th><th>Simples Nacional</th><th>Formalização</th><th>E-mail</th><th>Contato</th><th>Observações</th><th>Ativo</th></tr></thead><tbody>'+
     ks.map(k=>{const m=lista[k]; const incompleto=!m.cpfConta&&!m.cpf; return '<tr><td class="mono">'+esc(m.crm||k)+'</td><td>'+esc(m.nome)+(incompleto?' <span class="tag bad">sem CPF/CNPJ</span>':'')+'</td>'+
       '<td><select id="md_'+safeKey(k)+'_v" data-chg="med" data-k="'+esc(k)+'" data-f="vinculo"'+dis+' style="min-width:110px"><option value="">'+esc('(padrão: '+(ct.vinculoPadrao||'SOCIO')+')')+'</option>'+VINCULOS.map(v=>'<option'+(m.vinculo===v?' selected':'')+'>'+v+'</option>').join('')+'</select></td>'+
-      '<td>'+inp(k,'empresaPagadora',110)+'</td><td>'+inp(k,'cpfConta',150)+'</td><td>'+inp(k,'empresaPJ')+'</td><td>'+inp(k,'formalizacao',100)+'</td><td>'+inp(k,'email',180)+'</td><td>'+inp(k,'contato',120)+'</td><td>'+inp(k,'observacoes')+'</td>'+
+      '<td>'+inp(k,'empresaPagadora',110)+'</td><td>'+inp(k,'cpfConta',150)+'</td><td>'+inp(k,'empresaPJ')+'</td><td><select id="md_'+safeKey(k)+'_sn" data-chg="med" data-k="'+esc(k)+'" data-f="simples"'+dis+' style="min-width:90px"><option value="">—</option><option value="SIM"'+(m.simples==='SIM'?' selected':'')+'>Sim</option><option value="NAO"'+(m.simples==='NAO'?' selected':'')+'>Não</option></select></td><td>'+inp(k,'formalizacao',100)+'</td><td>'+inp(k,'email',180)+'</td><td>'+inp(k,'contato',120)+'</td><td>'+inp(k,'observacoes')+'</td>'+
       '<td><input type="checkbox" id="md_'+safeKey(k)+'_a" data-chg="medChk" data-k="'+esc(k)+'" data-f="ativo"'+(m.ativo!==false?' checked':'')+dis+'></td></tr>';}).join('')+'</tbody></table></div>';
 }
 
@@ -509,6 +525,9 @@ function viewAdmin(){
   out+='<div class="grid g2"><div class="card"><div class="row"><h2 class="grow">Empresas pagadoras</h2><button class="btn sm" data-act="addEmp">Adicionar</button></div><p class="muted">Tabela usada para o “Cod Empresa Pagadora” da importação no Sankhya.</p><div class="tbl" style="max-height:420px;overflow:auto"><table><thead><tr><th>Sigla</th><th>Razão abreviada</th><th class="n">Código</th><th></th></tr></thead><tbody>'+
     emp.map((e,i)=>'<tr><td><input type="text" id="em'+i+'s" value="'+esc(e.sigla)+'" data-chg="emp" data-i="'+i+'" data-f="sigla" style="min-width:90px"></td><td><input type="text" id="em'+i+'r" value="'+esc(e.razao)+'" data-chg="emp" data-i="'+i+'" data-f="razao"></td><td class="n"><input type="number" id="em'+i+'c" value="'+esc(e.cod)+'" data-chg="emp" data-i="'+i+'" data-f="cod"></td><td><button class="btn ghost sm" data-act="rmEmp" data-i="'+i+'" aria-label="Remover">✕</button></td></tr>').join('')+'</tbody></table></div></div>'+
     '<div class="card"><h2>Naturezas (tipo de pagamento)</h2><div class="fields">'+Object.keys(NATUREZAS_PADRAO).map(k=>'<label class="f">'+k+'<input type="number" id="nt_'+safeKey(k)+'" value="'+esc(nat[k])+'" data-chg="nat" data-f="'+esc(k)+'"></label>').join('')+'</div><p class="muted">SÓCIO → Honorários · RPA → RPA · PJ → PJ · PRÓ-LABORE → Pró-Labore.</p></div></div>';
+  const ret=Object.assign({},RETENCOES_PADRAO,(S.config&&S.config.retencoes)||{});
+  out+='<div class="grid g2"><div class="card"><h2>Retenções da NF de PJ (não optante do Simples)</h2><div class="fields">'+[['pis','PIS'],['cofins','COFINS'],['csll','CSLL'],['ir','IR']].map(([k,l])=>'<label class="f">'+l+' (%)<input type="text" inputmode="decimal" id="rt_'+k+'" value="'+dec(ret[k])+'" data-chg="retCfg" data-f="'+k+'"></label>').join('')+'</div><p class="muted">Aplicadas sobre o valor bruto na folha e na solicitação de NF quando o médico é PJ e não é optante do Simples Nacional (cadastro de Médicos).</p></div>'+
+    '<div class="card"><h2>Assinatura dos e-mails</h2><label class="f">Texto da assinatura<textarea id="cfgAssin" data-chg="assinCfg" style="min-height:80px">'+esc((S.config&&S.config.assinaturaEmail)||'Gestão & Relacionamento - DOC CSC')+'</textarea></label></div></div>';
   return out;
 }
 
@@ -537,6 +556,16 @@ function viewModal(){
   }
   if(m.type==='senha'){
     return '<h2>'+esc(m.title)+'</h2><p>Repasse estes dados para <b>'+esc(m.nome)+'</b> por um canal seguro. A senha não será mostrada de novo; no primeiro acesso a pessoa define a própria senha.</p><div class="card" style="background:var(--sunken)"><div class="fields"><div><div class="eyebrow">E-mail</div><b>'+esc(m.email)+'</b></div><div><div class="eyebrow">Senha temporária</div><b class="mono" style="font-size:1.1rem">'+esc(m.senha)+'</b></div><div class="wfull"><div class="eyebrow">Endereço</div><span class="mono">'+esc(location.origin)+'</span></div></div></div><div class="row"><button class="btn" data-act="copiarSenha">Copiar dados</button><span class="grow"></span><button class="btn pri" data-act="modalClose">Pronto</button></div>';
+  }
+  if(m.type==='email'){
+    const env=window.__email;
+    return '<h2>'+esc(m.titulo)+'</h2>'+
+      '<div class="fields"><label class="f w2">Para<input type="text" id="emTo" value="'+esc(m.to)+'" data-inp="emField" data-f="to" placeholder="e-mail do médico"></label>'+(m.tipo==='nf'?'<label class="f">Prazo para envio da NF<input type="date" id="emPrazo" value="'+esc(m.prazo)+'" data-chg="emailPrazo"></label>':'')+
+      '<label class="f wfull">Assunto<input type="text" id="emAssunto" value="'+esc(m.subject)+'" data-inp="emField" data-f="subject"></label>'+
+      '<label class="f wfull">Mensagem<textarea id="emCorpo" style="min-height:300px;font-size:.84rem" data-inp="emField" data-f="body">'+esc(m.body)+'</textarea></label></div>'+
+      (!m.to?'<div class="banner warn">Este médico não tem e-mail no cadastro. Informe acima ou cadastre em Médicos.</div>':'')+
+      (env?'':'<p class="muted" style="margin:0;font-size:.82rem">O envio direto pelo sistema não está configurado. Use “Abrir no meu e-mail” ou copie o texto.</p>')+
+      '<div class="row"><button class="btn" data-act="emailCopiar">Copiar texto</button><button class="btn" data-act="emailAbrir">Abrir no meu e-mail</button><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button>'+(env?'<button class="btn pri" data-act="emailEnviar"'+(S.busy?' disabled':'')+'>'+(S.busy?'Enviando…':'Enviar e-mail')+'</button>':'')+'</div>';
   }
   if(m.type==='confirm'){
     return '<h2>'+esc(m.title)+'</h2><p>'+esc(m.text)+'</p>'+(m.motivo?'<label class="f">Motivo (obrigatório)<textarea id="cfMot" style="min-height:80px" placeholder="Explique por que está excluindo">'+esc(m.motivoTxt||'')+'</textarea></label>':'')+'<div class="row"><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button><button class="btn '+(m.danger?'bad':'pri')+'" data-act="confirmOk">'+esc(m.ok)+'</button></div>';
@@ -654,6 +683,75 @@ function wbFolha(F,ct,f){
 }
 
 /* ================= AÇÕES ================= */
+/* ---------- e-mails aos médicos ---------- */
+function vinculoDe(ct,k){ const m=(S.medicos[ct.id]||{})[k]||{}; return String(m.vinculo||ct.vinculoPadrao||'SOCIO').toUpperCase(); }
+function botoesEmail(f,ct,k){
+  if(!can('emails')) return '';
+  const env=(f.envios||{})[k]||{}; const pj=vinculoDe(ct,k)==='PJ';
+  const quando=e=>e?' — '+(e.via==='enviado'?'enviado':'preparado')+' em '+fDT(e.em):'';
+  return '<button class="btn ghost sm mail'+(env.demo?' sent':'')+'" data-act="emailDemo" data-k="'+esc(k)+'" title="Enviar demonstrativo de horas e valores'+esc(quando(env.demo))+'" aria-label="Enviar demonstrativo por e-mail"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></button>'+
+    (pj?'<button class="btn ghost sm mail'+(env.nf?' sent':'')+'" data-act="emailNF" data-k="'+esc(k)+'" title="Solicitar NF ao médico PJ'+esc(quando(env.nf))+'">NF</button>':'');
+}
+const mesExtenso=comp=>{ const n=['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']; const [y,m]=String(comp).split('-'); return n[+m-1]+'/'+y; };
+function prazoPadraoNF(ct,comp){ const [y,m]=comp.split('-').map(Number); const dia=Math.min(28,Math.max(1,num(ct.diaLimiteNF)||17)); const d=new Date(Date.UTC(y,m,dia)); return d.toISOString().slice(0,10); }
+function dadosMedico(f,ct,k){
+  const c=calcular(f,ct); const F=folhaAtual(f,ct,c);
+  const r=(F.rows||[]).find(x=>x.k===k)||{};
+  const reg=(S.medicos[ct.id]||{})[k]||{}; const mf=(f.medicos||{})[k]||{};
+  return {c,r,linhas:c.linhas.filter(l=>l.k===k),nome:reg.nome||mf.nome||r.nome||k,email:(reg.email||mf.email||'').trim()};
+}
+function textoDemonstrativo(f,ct,k){
+  const D=dadosMedico(f,ct,k); const r=D.r; const ass=(S.config&&S.config.assinaturaEmail)||'Gestão & Relacionamento - DOC CSC';
+  const hT=D.linhas.reduce((s,l)=>s+(l.uPag==='hora'?l.qPag:l.apur),0);
+  const L=['Prezado(a) Dr(a) '+D.nome+',','',
+    'Segue o demonstrativo dos seus plantões no contrato '+(ct.sigla||'')+' - '+(ct.nome||'')+', competência '+mesExtenso(f.competencia)+(f.periodo?' (período '+f.periodo+')':'')+'.','',
+    ...D.linhas.map(l=>'• '+l.esp+' · '+l.tipo+': '+fH(l.qPag)+' '+(UNIDADES[l.uPag]||'').toLowerCase()+(l.qPag===1?'':'s')+' × '+brl(l.vPag)+' = '+brl(l.totPag)),'',
+    'Total de horas trabalhadas: '+fH(hT)+' h',
+    'Valor bruto: '+brl(r.total)];
+  if(r.pn) L.push('(-) Desconto PN: '+brl(r.pn));
+  if(r.ret) L.push('(-) Retenções'+(r.retAuto&&!r.retManual?' (PIS, COFINS, CSLL e IR)':'')+': '+brl(r.ret));
+  if(r.taxa) L.push('(-) Taxa de sócio: '+brl(r.taxa));
+  L.push('Valor total a receber: '+brl(r.liq),'','Em caso de divergência, responda este e-mail.','','Atenciosamente,',ass);
+  return {to:D.email,subject:'Demonstrativo de plantões — '+(ct.sigla||'')+' — '+mesExtenso(f.competencia),body:L.join('\n'),nome:D.nome};
+}
+function textoSolicitaNF(f,ct,k,prazo){
+  const D=dadosMedico(f,ct,k); const r=D.r; const ass=(S.config&&S.config.assinaturaEmail)||'Gestão & Relacionamento - DOC CSC';
+  const bruto=r.aReceber!=null?r.aReceber:r.total; const simples=!!r.simples; const R=retencoesNF(bruto,S.config&&S.config.retencoes);
+  const ref=mesExtenso(f.competencia);
+  const L=['Prezado(a) Dr(a) '+D.nome+'.','',
+    'Segue solicitação de NF. As notas devem ser emitidas e enviadas até '+fD(prazo)+' para pagamento na data prevista.','',
+    'Gentileza retornar o mais breve possível.','',
+    'TOMADOR DE SERVIÇOS',
+    'Razão Social: '+(ct.tomador||''),'CNPJ: '+(ct.cnpj||''),'Endereço: '+(ct.endereco||''),'CEP: '+(ct.cep||''),'Município: '+(ct.municipio||''),'',
+    'VALOR BRUTO PARA EMISSÃO',
+    'Valor bruto: '+brl(bruto),'Referência: '+ref,''];
+  if(simples) L.push('CÁLCULO DA NF (empresa optante do Simples Nacional)','Base de cálculo: '+brl(bruto),'Total retido: '+brl(0),'Valor da NF líquido: '+brl(bruto),'');
+  else L.push('CÁLCULO DA NF (empresa não optante do Simples Nacional)','Base de cálculo: '+brl(bruto),...R.itens.map(i=>i.nome+' (-) '+String(i.pct).replace('.',',')+'%: '+brl(i.valor)),'Total retido: '+brl(R.total),'Valor da NF líquido: '+brl(R.liquido),'');
+  L.push('DISCRIMINAÇÃO DOS SERVIÇOS',(ct.discriminacaoPJ||'Conforme padrão da contabilidade'),'',
+    'INFORMAÇÕES OBRIGATÓRIAS NA NF (DESCRIÇÃO / DISCRIMINAÇÃO DOS SERVIÇOS)',
+    '1. Local e Município da prestação dos serviços.',(ct.localPrestacao||ct.municipio||''),'',
+    '2. Instrução Normativa abaixo, na íntegra',
+    'O serviço é executado pelo próprio sócio, o que desobriga a contratante da retenção do INSS (IN 2110/2022 ART. 115, INCISO III, §2º E §3º.)','',
+    '3. Mês de referência do Serviço;',ref,'',
+    '4. Dados bancários para pagamento, conforme modelo.',
+    'Nome da empresa','Nome do Sócio que executou os serviços','Banco:','Agência:','Conta:','CNPJ (conta empresarial)','',
+    '**ATENÇÃO**','Os pagamentos referentes a médicos Pessoa Jurídica deverão, preferencialmente, ser efetuados em conta corrente Pessoa Jurídica.','',
+    'Atenciosamente,',ass);
+  return {to:D.email,subject:'Solicitação de NF — '+(ct.sigla||'')+' — '+ref+' — '+D.nome,body:L.join('\n'),nome:D.nome};
+}
+function abrirEmail(tipo,k){
+  const f=fechById(S.fid); const ct=ctById(f.contratoId); if(!f||!ct) return;
+  const prazo=(f.folhaParams&&f.folhaParams.prazoNF)||prazoPadraoNF(ct,f.competencia);
+  const t= tipo==='nf'? textoSolicitaNF(f,ct,k,prazo) : textoDemonstrativo(f,ct,k);
+  S.modal={type:'email',tipo,k,prazo,titulo:(tipo==='nf'?'Solicitar NF — ':'Demonstrativo — ')+t.nome,to:t.to,subject:t.subject,body:t.body};
+  render();
+}
+function registrarEnvio(via){
+  const m=S.modal; const f=fechById(S.fid); if(!m||!f) return;
+  const campo=m.tipo==='nf'?'nf':'demo';
+  const nomes={enviado:'enviado',aberto:'aberto no programa de e-mail',copiado:'copiado'};
+  updFech(f.id,{envios:{[m.k]:{[campo]:{via,em:nowISO(),por:S.uid,to:m.to}}},eventos:evento(f,'email',(m.tipo==='nf'?'Solicitação de NF':'Demonstrativo')+' para '+m.titulo.split(' — ').pop()+' ('+(m.to||'sem e-mail')+'): '+nomes[via])});
+}
 async function excluirFechamento(f,motivo){
   const ct=ctById(f.contratoId)||{}; const c=calcular(f,ct); const em=nowISO();
   // registro permanente da exclusão (gravado antes de apagar)
@@ -699,7 +797,7 @@ const ACT={
   aprovar(){ const f=fechById(S.fid); const ct=ctById(f.contratoId);
     confirmar('Aprovar e travar o fechamento?','O relatório fica travado e o resumo de faturamento e pagamento é emitido com os valores atuais. Depois disso, só quem tem permissão de reabrir pode alterar.','Aprovar e travar',()=>{
       const calc=calcular({...f,congelado:null},ct); const em=nowISO();
-      wr('congelados/'+f.id,()=>S.db.doc('congelados/'+f.id).set({calc,itens:ct.itens||[],em}));
+      wr('congelados/'+f.id,()=>S.db.doc('congelados/'+f.id).set({calc,itens:ct.itens||[],meta:f.meta||'',em}));
       updFech(f.id,{status:'aprovado',aprovadoPor:S.uid,aprovadoEm:em,t:{...f.t,aprovado:em},eventos:evento(f,'aprov','Aprovado e travado. Faturamento '+brl(calc.totais.totFat)+' · Pagamento '+brl(calc.totais.totPag)+' · Margem '+brl(calc.totais.margem))});
       S.tab='resumo'; toast('Fechamento aprovado e travado.'); }); },
   devolver(){ const f=fechById(S.fid); const mot=(S.devolver||'').trim(); if(!mot){ toast('Escreva o motivo da devolução.','bad'); return; }
@@ -708,6 +806,18 @@ const ACT={
       wr('congelados/'+f.id,()=>S.db.doc('congelados/'+f.id).delete()); wr('folhas/'+f.id,()=>S.db.doc('folhas/'+f.id).delete());
       updFech(f.id,{status:'conferencia',aprovadoEm:null,penf:null,folhaInfo:null,t:{...f.t,enviado:null,aprovado:null,nf:null,folha:null},eventos:evento(f,'reab','Fechamento reaberto (aprovação, NF e folha anteriores descartadas)')}); S.tab='conf'; },true); },
   excluirFech(){ pedirExclusao(fechById(S.fid)); },
+  emailDemo(el){ abrirEmail('demo',el.dataset.k); },
+  emailNF(el){ abrirEmail('nf',el.dataset.k); },
+  emailCopiar(){ const m=S.modal; const t='Para: '+m.to+'\nAssunto: '+m.subject+'\n\n'+m.body; try{ navigator.clipboard.writeText(t).then(()=>{ registrarEnvio('copiado'); toast('Texto copiado.'); },()=>{ const el=$('#emCorpo'); if(el){ el.focus(); el.select(); } toast('Selecione o texto e copie (Ctrl+C).','bad'); }); }catch(e){ toast('Selecione o texto e copie (Ctrl+C).','bad'); } },
+  emailAbrir(){ const m=S.modal; if(!m.to){ toast('Informe o e-mail do médico.','bad'); return; } registrarEnvio('aberto'); const a=document.createElement('a'); a.href='mailto:'+encodeURIComponent(m.to)+'?subject='+encodeURIComponent(m.subject)+'&body='+encodeURIComponent(m.body); a.target='_blank'; a.rel='noopener'; document.body.appendChild(a); a.click(); a.remove(); },
+  async emailEnviar(){ const m=S.modal; if(!/^\S+@\S+\.\S+$/.test(m.to||'')){ toast('Informe um e-mail válido.','bad'); return; }
+    S.busy=true; render();
+    try{ await window.__email.enviar({to:m.to,subject:m.subject,text:m.body}); registrarEnvio('enviado'); S.modal=null; toast('E-mail enviado para '+m.to+'.'); }
+    catch(e){ toast(e.message||'Não foi possível enviar.','bad'); }
+    S.busy=false; render(); },
+  setMeta(el){ const f=fechById(S.fid); const m=el.dataset.m; if((f.meta||'')===m) return; const nomes={'':'valores padrão',minima:'meta mínima',mediana:'meta mediana',maxima:'meta máxima'};
+    updFech(f.id,{meta:m,eventos:evento(f,'meta','Meta do fechamento alterada para '+nomes[m])}); toast('Cálculo com '+nomes[m]+'.'); },
+  toggleMetas(el){ const i=+el.dataset.i; S.metaOpen[i]=!S.metaOpen[i]; render(); },
   excluirFechLista(el){ pedirExclusao(fechById(el.dataset.id)); },
   excluirLinha(el){ const f=fechById(S.fid); const ct=ctById(f.contratoId); const l=calcular(f,ct).linhas.find(x=>x.key===el.dataset.key); if(!l) return;
     confirmar('Excluir esta linha do fechamento?',l.nome+' — '+l.esp+' · '+l.tipo+': '+fH(l.apur)+' h apuradas, pagamento '+brl(l.totPag)+', faturamento '+brl(l.totFat)+'. A linha sai dos totais, da NF e da folha deste mês e pode ser restaurada enquanto o fechamento não for aprovado.','Excluir linha',mot=>{
@@ -772,16 +882,24 @@ const CHG={
   conf(el){ const f=fechById(S.fid); updFech(f.id,{conferidos:{[el.dataset.key]:el.checked}}); },
   penf(el){ const f=fechById(S.fid); updFech(f.id,{penfRasc:{[el.dataset.f]:el.value}}); },
   folhaP(el){ const f=fechById(S.fid); updFech(f.id,{folhaParams:{[el.dataset.f]:el.value}}); },
-  folhaV(el){ const f=fechById(S.fid); updFech(f.id,{folhaParams:{[el.dataset.f]:{[el.dataset.k]:num(el.value)}}}); },
+  folhaV(el){ const f=fechById(S.fid); const v=el.value.trim()===''?null:num(el.value); updFech(f.id,{folhaParams:{[el.dataset.f]:{[el.dataset.k]:v}}}); },
+  itemValor(el){ const f=fechById(S.fid); const ct=ctById(f.contratoId); if(!ct) return; const v=num(el.value);
+    const itens=(ct.itens||[]).map(i=>i.id!==el.dataset.item? i : {...i,[el.dataset.f]:v,...(el.dataset.f==='valorPagar'&&v>0?{fontePag:'cadastro'}:{})});
+    const it=itens.find(i=>i.id===el.dataset.item)||{};
+    wr('contratos/'+ct.id,()=>S.db.doc('contratos/'+ct.id).update({itens,atualizadoEm:nowISO(),atualizadoPor:S.uid}));
+    updFech(f.id,{eventos:evento(f,'valor','Contrato '+(ct.sigla||'')+': '+(el.dataset.f==='valorPagar'?'valor a pagar':'valor a faturar')+' de '+it.especialidade+' · '+it.tipo+' definido em '+brl(v))});
+    toast('Valor gravado no contrato.'); },
   ct(el){ const f=el.dataset.f; S.draft[f]= el.dataset.num? num(el.value) : el.value;
     if(f==='sigla'){ const c=((S.config&&S.config.centros)||[]).find(x=>normTxt(x.sigla)===normTxt(el.value)); const d=S.draft;
       if(c){ if(!d.centroResultado) d.centroResultado=String(c.codigo); if(!d.nome) d.nome=c.descricao; if(!d.numero&&c.contrato) d.numero=String(c.contrato); if(!d.ano&&c.ano) d.ano=String(c.ano).startsWith('/')?String(c.ano):'/'+c.ano; if(!d.empresa&&c.empresa){ d.empresa=c.empresa; const e=((S.config&&S.config.empresas)||[]).find(x=>normTxt(x.sigla)===normTxt(c.empresa)); if(e&&!d.codEmpresaPagadora) d.codEmpresaPagadora=e.cod; } } }
     if(f==='empresa'){ const e=((S.config&&S.config.empresas)||[]).find(x=>normTxt(x.sigla)===normTxt(el.value)); if(e&&!S.draft.codEmpresaPagadora) S.draft.codEmpresaPagadora=e.cod; } render(); },
   ctChk(el){ S.draft[el.dataset.f]=el.checked; },
+  itMeta(el){ const it=S.draft.itens[+el.dataset.i]; it.metas=it.metas||{}; it.metas[el.dataset.m]=it.metas[el.dataset.m]||{}; it.metas[el.dataset.m][el.dataset.f]=el.value.trim()===''?0:num(el.value); },
   it(el){ const it=S.draft.itens[+el.dataset.i]; const f=el.dataset.f; it[f]= ['qtdMes','valorFaturar','valorPagar'].includes(f)? num(el.value) : el.value; render(); },
   dif(el){ const x=S.draft.diferenciados[+el.dataset.i]; const f=el.dataset.f; x[f]= f==='valorPagar'? num(el.value) : el.value; },
   ctMap(el){ S.draft.mapeamento[+el.dataset.i].item=el.value; },
   medCt(el){ S.medCt=el.value; render(); },
+  emailPrazo(el){ const m=S.modal; const f=fechById(S.fid); const ct=ctById(f.contratoId); m.prazo=el.value; updFech(f.id,{folhaParams:{prazoNF:el.value}}); const t=textoSolicitaNF(f,ct,m.k,el.value); m.body=t.body; render(); },
   med(el){ const ct=S.medCt; const k=el.dataset.k; wr('medicos/'+ct,()=>S.db.doc('medicos/'+ct).update({lista:{[k]:{[el.dataset.f]:el.value.trim()}}})); },
   medChk(el){ const ct=S.medCt; const k=el.dataset.k; wr('medicos/'+ct,()=>S.db.doc('medicos/'+ct).update({lista:{[k]:{ativo:el.checked}}})); },
   async importBase(el){ const file=el.files[0]; if(!file) return; const ct=ctById(S.medCt); try{ const n=await importarBaseMedicos(file,ct); toast(n+' médico(s) atualizados a partir da planilha.'); }catch(e){ toast(e.message||errMsg(e),'bad'); } },
@@ -789,11 +907,14 @@ const CHG={
   uPerm(el){ const id=el.dataset.id; wr('usuarios/'+id,()=>S.db.doc('usuarios/'+id).update({perfil:'custom',perms:{[el.dataset.p]:el.checked}})); },
   uAtivo(el){ const id=el.dataset.id; wr('usuarios/'+id,()=>S.db.doc('usuarios/'+id).update({ativo:el.checked})); },
   emp(el){ const e=((S.config&&S.config.empresas)||[]).map(x=>({...x})); const f=el.dataset.f; e[+el.dataset.i][f]= f==='cod'? num(el.value) : el.value; saveConfig({empresas:e}); },
-  nat(el){ saveConfig({naturezas:{[el.dataset.f]:num(el.value)}}); }
+  nat(el){ saveConfig({naturezas:{[el.dataset.f]:num(el.value)}}); },
+  retCfg(el){ saveConfig({retencoes:{[el.dataset.f]:num(el.value)}}); },
+  assinCfg(el){ saveConfig({assinaturaEmail:el.value}); }
 };
 let searchT;
 const INP={
   confQ(el){ S.conf.q=el.value; render(); },
+  emField(el){ if(S.modal) S.modal[el.dataset.f]=el.value; },
   medQ(el){ S.medQ=el.value; render(); },
   devolver(el){ S.devolver=el.value; },
   obs(el){ S.obsDraft[S.fid]=el.value; const b=document.querySelector('[data-act="salvarObs"]'); if(b){ const f=fechById(S.fid); b.disabled= el.value===((f.obs&&f.obs.texto)||''); } },

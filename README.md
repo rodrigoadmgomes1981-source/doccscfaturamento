@@ -75,6 +75,23 @@ git push -u origin main
 3. Em **Administração › Criar conta de acesso**, cadastre a equipe. O sistema gera uma **senha temporária** para você repassar, e a pessoa troca a senha no primeiro login.
 4. Esqueceu a senha? O administrador clica em **Redefinir senha** no usuário.
 
+### 4. (Opcional) Envio de e-mails aos médicos
+
+Os botões ✉ (demonstrativo de horas e valores) e **NF** (solicitação de NF a médicos PJ) ficam no detalhamento do fechamento e na folha.
+
+- **Sem configuração:** o botão abre o e-mail pronto no programa de e-mail de quem está usando, ou copia o texto.
+- **Com configuração:** para o sistema enviar sozinho, cadastre na Vercel (Settings › Environment Variables) e faça um *Redeploy*:
+
+| Variável | Exemplo (Microsoft 365) |
+|---|---|
+| `SMTP_HOST` | `smtp.office365.com` |
+| `SMTP_PORT` | `587` |
+| `SMTP_USER` | `faturamento@empresa.com.br` |
+| `SMTP_PASS` | senha da caixa (ou senha de app) |
+| `SMTP_FROM` | `Faturamento DOC <faturamento@empresa.com.br>` |
+
+O e-mail sai pela conta configurada, com "responder para" o e-mail de quem clicou em enviar. No Microsoft 365, a caixa precisa ter o *SMTP autenticado* habilitado (Centro de administração › Usuários › Email › Gerenciar aplicativos de email).
+
 > **Plano da Vercel.** O plano *Hobby* é para uso pessoal e não comercial, e o Blob gratuito tem limite de **2.000 gravações por mês**. Se o limite estourar, o Blob fica bloqueado por 30 dias. Para uso na empresa, use o plano **Pro**. Nele o consumo deste sistema custa centavos por mês.
 
 ---
@@ -125,6 +142,8 @@ Os arquivos são JSON legíveis: `db/contratos/*.json`, `db/fechamentos/*.json`�
 | Pagamento | Qtd a pagar × valor a pagar do item. Se houver valor diferenciado para o médico, ele prevalece. Com a fonte "Pega Plantão", usa o *Total (Tolerância)*. |
 | Faturamento | Qtd a faturar × valor a faturar do item. |
 | Margem operacional | Faturamento − pagamento. |
+| Metas | Cada item do contrato pode ter valores a faturar e a pagar para as metas mínima, mediana e máxima. A meta escolhida na conferência define os valores usados; meta sem valor usa o valor padrão do item. |
+| Retenções NF PJ | Médico PJ não optante do Simples: PIS 0,65%, COFINS 3%, CSLL 1% e IR 1,5% sobre o bruto (editáveis em Administração), descontados na folha e mostrados na solicitação de NF. |
 | Taxa de sócio | R$ 150 para vínculo SÓCIO acima de 24 h e com valor a receber (configurável por contrato). |
 | Nº documento (ERP) | Nº do contrato + MM + AA (ex.: 986870726). |
 | Cód. reduzido | Sigla do CR + MM + AA (ex.: PAP0726). |

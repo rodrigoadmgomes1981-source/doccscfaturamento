@@ -88,6 +88,17 @@ th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--mu
 .tbl.fix tfoot td{position:sticky;bottom:0;z-index:1;box-shadow:inset 0 1px 0 var(--line)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .btn.del{color:var(--bad);padding:4px 7px}
+.btn.mail{color:var(--info);padding:4px 7px;font-size:.78rem;font-weight:700}
+.btn.mail.sent{color:var(--ok)}
+.btn.mail:hover{background:var(--info-soft);border-color:transparent}
+.btn.mail svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9;display:block}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--surface)}
+.seg button{all:unset;cursor:pointer;padding:7px 13px;font-weight:600;font-size:.86rem;color:var(--muted);border-right:1px solid var(--line)}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+.seg button:disabled{cursor:not-allowed;opacity:.6}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+tr.metas td{background:var(--sunken)}
 .btn.del:hover{background:var(--bad-soft);border-color:transparent}
 .btn.del svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9;display:block}
 th,td{padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:middle;white-space:nowrap}

@@ -191,5 +191,8 @@ export function criarPlataforma({ intervalo = 8000 } = {}) {
     async redefinir(id) { return chamar('auth', { action: 'redefinirSenha', id }); },
   };
 
-  return { db, user, downloads, contas };
+  /* ---------------------- e-mail (SMTP no servidor) ---------------------- */
+  const email = { async enviar({ to, subject, text }) { return chamar('db', { op: 'email', to, subject, text }); } };
+
+  return { db, user, downloads, contas, email };
 }

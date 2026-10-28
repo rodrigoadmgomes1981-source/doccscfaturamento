@@ -113,3 +113,36 @@ test('sem valor a pagar no contrato usa o valor/hora do Pega Plantão (PP)', () 
   const l2 = calcular(f, ctPAP).linhas[0];
   assert.equal(l2.pagPP, false); assert.equal(l2.totPag, 2000);
 });
+
+test('fonte "Pega Plantão" sem valor/hora no relatório usa o valor do contrato', () => {
+  const ct = { ...ctPAP, itens: [{ ...ctPAP.itens[0], fontePag: 'pega' }, ctPAP.itens[1]] };
+  const f = { base: [{ k: '1', s: 'PAP | PACS', n: 4, na: 4, plan: 48, real: 46.8, apur: 46.8667, vApur: 0 }], medicos: { 1: { nome: 'A', crm: '1' } } };
+  const l = calcular(f, ct).linhas[0];
+  assert.equal(l.pagPP, false); assert.equal(l.vPag, 166.6667); assert.equal(l.totPag, 7811.12);
+  const comPP = calcular({ ...f, base: [{ ...f.base[0], vApur: 46.8667 * 150 }] }, ct).linhas[0];
+  assert.equal(comPP.pagPP, true); assert.equal(comPP.vPag, 150);
+});
+
+test('retenções da NF (exemplo de R$ 9.500,00) e folha de PJ não optante', async () => {
+  const { retencoesNF } = await import('../src/core.js');
+  const R = retencoesNF(9500);
+  assert.deepEqual(R.itens.map((i) => i.valor), [61.75, 285, 95, 142.5]);
+  assert.equal(R.total, 584.25); assert.equal(R.liquido, 8915.75);
+  const c = calcular(fPAP, ctPAP);
+  const F = calcFolha(c, ctPAP, { '63383': { vinculo: 'PJ', simples: 'NAO' }, '54797': { vinculo: 'PJ', simples: 'SIM' } }, {}, {});
+  const pj = F.rows.find((r) => r.k === '63383'); const sn = F.rows.find((r) => r.k === '54797');
+  assert.equal(pj.ret, retencoesNF(17000).total); assert.equal(pj.taxa, 0); assert.equal(pj.liq, 17000 - pj.ret);
+  assert.equal(sn.ret, 0);
+  const man = calcFolha(c, ctPAP, { '63383': { vinculo: 'PJ' } }, { ret: { '63383': 100 } }, {}).rows.find((r) => r.k === '63383');
+  assert.equal(man.ret, 100);
+});
+
+test('meta escolhida usa os valores da meta; sem valor na meta usa o padrão', () => {
+  const ct = { ...ctPAP, itens: [{ ...ctPAP.itens[0], metas: { maxima: { valorFaturar: 200, valorPagar: 175 }, minima: { valorFaturar: 150 } } }, ctPAP.itens[1]] };
+  const f = { base: [{ k: '1', s: 'PAP | PACS', n: 1, na: 1, plan: 10, real: 10, apur: 10, vApur: 0 }], medicos: { 1: { nome: 'A', crm: '1' } } };
+  assert.equal(calcular({ ...f, meta: 'maxima' }, ct).linhas[0].totFat, 2000);
+  assert.equal(calcular({ ...f, meta: 'maxima' }, ct).linhas[0].totPag, 1750);
+  const mn = calcular({ ...f, meta: 'minima' }, ct).linhas[0];
+  assert.equal(mn.vFat, 150); assert.equal(mn.totPag, 1666.67);
+  assert.equal(calcular(f, ct).linhas[0].vFat, 189.38);
+});

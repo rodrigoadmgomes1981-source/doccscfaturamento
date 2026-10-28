@@ -64,7 +64,7 @@ function agregar(rows){
     const sk=setorKey(r); setores[sk]=(setores[sk]||0)+1;
     const key=r.k+'||'+sk;
     const b=base[key]||(base[key]={k:r.k,s:sk,n:0,na:0,plan:0,real:0,apur:0,vApur:0});
-    b.n++; if(r.apur>0) b.na++; b.plan+=r.plan; b.real+=r.real; b.apur+=r.apur; b.vApur+=r.totApur;
+    b.n++; if(r.apur>0) b.na++; b.plan+=r.plan; b.real+=r.real; b.apur+=r.apur; b.vApur+= r.totApur || (r.apur*r.vh) || 0;
     const m=meds[r.k]||(meds[r.k]={nome:r.nome,crm:r.crm,cpf:'',email:''});
     if(!m.cpf&&r.cpf) m.cpf=r.cpf; if(!m.email&&r.email) m.email=r.email;
   }
@@ -90,6 +90,9 @@ function calcular(fech, contrato){
   const map=Object.fromEntries((contrato&&contrato.mapeamento||[]).map(m=>[m.s,m.item]));
   const dif={}; for(const d of (contrato&&contrato.diferenciados||[])) if(d.crm&&d.item) dif[crmDigits(crmKey(d.crm))+'|'+d.item]=num(d.valorPagar);
   const meds=fech.medicos||{}; const aj=fech.ajustes||{}; const conf=fech.conferidos||{}; const exc=fech.excluidos||{};
+  // meta escolhida no fechamento (mínima/mediana/máxima): usa os valores da meta; sem valor na meta, usa o valor padrão do item
+  const meta=fech.meta||'';
+  const mv=(item,f)=>{ const m=meta&&item.metas&&item.metas[meta]; const v=m?num(m[f]):0; return v||num(item[f]); };
   const groups={}; const naoMap={};
   for(const b of (fech.base||[])){
     const it=map[b.s];
@@ -105,12 +108,14 @@ function calcular(fech, contrato){
     const qPag= a.qPag!=null? num(a.qPag) : qPagBase;
     const qFat= a.qFat!=null? num(a.qFat) : qFatBase;
     const d=dif[crmDigits(g.k)+'|'+g.item];
-    let vPag = d!=null? d : num(item.valorPagar);
-    let totPag, pagPP=false;
-    // fonte "Pega Plantão", ou contrato sem valor a pagar: usa o valor/hora configurado no relatório
-    if(d==null && (item.fontePag==='pega' || (!vPag && g.vApur>0))){ pagPP=true; vPag = g.apur? g.vApur/g.apur : 0; totPag = a.qPag!=null? r2(qPag*vPag) : r2(g.vApur); }
-    else totPag=r2(qPag*vPag);
-    const vFat=num(item.valorFaturar); const totFat=r2(qFat*vFat);
+    // Valor a pagar: valor diferenciado do médico > contrato. O valor/hora do Pega Plantão (PP) entra
+    // quando a fonte do item é "Pega Plantão" ou o contrato não tem valor — e só se o relatório trouxer valor.
+    const vCont = d!=null? d : mv(item,'valorPagar');
+    const vPP = g.apur>0 && g.vApur>0 ? g.vApur/g.apur : 0;
+    const pagPP = d==null && vPP>0 && (item.fontePag==='pega' || !vCont);
+    let vPag = pagPP? vPP : vCont;
+    const totPag = pagPP && a.qPag==null ? r2(g.vApur) : r2(qPag*vPag);
+    const vFat=mv(item,'valorFaturar'); const totFat=r2(qFat*vFat);
     const m=meds[g.k]||{};
     return {key:g.key,k:g.k,nome:m.nome||g.k,crm:m.crm||g.k,itemId:g.item,esp:item.especialidade||'',tipo:item.tipo||'',
       uPag:item.unidadePag||'hora',uFat:item.unidadeFat||'hora',n:g.n,na:g.na,plan:r4(g.plan),real:r4(g.real),apur:r4(g.apur),
@@ -134,6 +139,14 @@ function ultimoDiaMesSeguinte(comp){ const {y,m}=mmYY(comp); const d=new Date(Da
 function numeroDocumento(ct,comp){ const {mm,yy}=mmYY(comp); return String(ct.numero||'').replace(/\D/g,'')+mm+yy; }
 function codReduzido(ct,comp){ const {mm,yy}=mmYY(comp); return String(ct.sigla||'')+mm+yy; }
 
+const RETENCOES_PADRAO={pis:0.65,cofins:3,csll:1,ir:1.5};
+/** Retenções federais da NF de PJ não optante do Simples (PIS, COFINS, CSLL, IR) sobre o valor bruto. */
+function retencoesNF(bruto, taxas){
+  const T=Object.assign({},RETENCOES_PADRAO,taxas||{});
+  const itens=[['PIS','pis'],['COFINS','cofins'],['CSLL','csll'],['IR','ir']].map(([n,k])=>({nome:n,pct:num(T[k]),valor:r2(bruto*num(T[k])/100)}));
+  const total=r2(itens.reduce((s,i)=>s+i.valor,0));
+  return {base:r2(bruto),itens,total,liquido:r2(bruto-total)};
+}
 /** Monta a folha de pagamento por médico a partir das linhas aprovadas. */
 function calcFolha(calc, ct, medReg, params, config){
   const emp=(config&&config.empresas)||[]; const nat=Object.assign({},NATUREZAS_PADRAO,(config&&config.naturezas)||{});
@@ -144,13 +157,17 @@ function calcFolha(calc, ct, medReg, params, config){
   const rows=Object.values(by).filter(f=>f.total!==0||f.horas!==0).map(f=>{
     const m=(medReg&&medReg[f.k])||{};
     const vinc=String(m.vinculo||ct.vinculoPadrao||'SOCIO').toUpperCase();
-    const total=r2(f.total), vpn=r2(num(pn[f.k])), aReceber=r2(total-vpn), vret=r2(num(ret[f.k]));
+    const total=r2(f.total), vpn=r2(num(pn[f.k])), aReceber=r2(total-vpn);
+    const simples=String(m.simples||'').toUpperCase()==='SIM';
+    const retAuto= vinc==='PJ' && !simples && aReceber>0 ? retencoesNF(aReceber,config&&config.retencoes) : null;
+    const retManual= ret[f.k]!=null && ret[f.k]!=='';
+    const vret= retManual? r2(num(ret[f.k])) : (retAuto? retAuto.total : 0);
     const taxa= vinc==='SOCIO' && f.horas>taxaMin && aReceber>0 ? taxaV : 0;
     const liq=r2(aReceber-vret-taxa);
     const empresa=(m.empresaPagadora||ct.empresa||'').trim();
     const e=emp.find(x=>normTxt(x.sigla)===normTxt(empresa))||emp.find(x=>normTxt(x.razao)===normTxt(empresa));
     const tipoPag=TIPO_PAG[vinc]||'Honorários';
-    return {k:f.k,crm:crmDigits(f.k),crmFull:f.crm,nome:f.nome,horas:r4(f.horas),total,pn:vpn,aReceber,ret:vret,taxa,liq,vinculo:vinc,
+    return {k:f.k,crm:crmDigits(f.k),crmFull:f.crm,nome:f.nome,horas:r4(f.horas),total,pn:vpn,aReceber,ret:vret,retManual,retAuto,simples,taxa,liq,vinculo:vinc,
       empresa, codEmpresa: e? e.cod : (ct.codEmpresaPagadora||''), razaoEmpresa: e? e.razao : empresa, cpfConta: m.cpfConta||m.cpf||'',
       empresaPJ:m.empresaPJ||'', formalizacao:m.formalizacao||'', obs:m.observacoes||'', email:m.email||'', contato:m.contato||'',
       tipoPag, natureza: nat[tipoPag]||'', alertas:[]};
@@ -190,4 +207,4 @@ function descricaoNF(tpl, calc, comp, ct, periodo){
   return String(tpl||'REFERENTE A PRESTAÇÃO DE SERVIÇOS MÉDICOS ({ESPECIALIDADES}) - PERÍODO {PERIODO}\n{ITENS}\nVALOR TOTAL {VALOR_TOTAL}').replace(/\{([A-Z_]+)\}/g,(m,k)=>ctx[k]!=null?ctx[k]:m);
 }
 
-export {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, brl, qtdTxt, periodoTxt, descricaoNF};
+export {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, retencoesNF, RETENCOES_PADRAO, brl, qtdTxt, periodoTxt, descricaoNF};

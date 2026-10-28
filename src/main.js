@@ -83,6 +83,7 @@ async function iniciar() {
   const plataforma = criarPlataforma();
   window.__platform = { use: async (n) => plataforma[n] || null };
   window.__contas = plataforma.contas;
+  try { const st = await chamar('auth', { action: 'status' }); if (st.email) window.__email = plataforma.email; } catch { /* sem envio direto */ }
   window.__trocarSenha = trocarSenhaDialogo;
   window.__logout = async () => { try { await chamar('auth', { action: 'logout' }); } catch { /* segue */ } location.reload(); };
   app.innerHTML = '';

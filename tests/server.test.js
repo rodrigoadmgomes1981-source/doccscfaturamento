@@ -148,3 +148,29 @@ for (const tipo of ['pasta', 'blob']) test(`API (${tipo}): primeiro administrado
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('API: envio de e-mail exige SMTP configurado e destinatário válido', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fm-mail-'));
+  _setStorage(fsStorage(dir));
+  delete process.env.SMTP_HOST; process.env.ADMIN_EMAILS = 'chefe@empresa.com';
+  const a = cliente();
+  try {
+    await a('auth', { action: 'setup', nome: 'Chefe', email: 'chefe@empresa.com', senha: 'senha-forte-1' });
+    assert.equal((await a('auth', { action: 'status' })).body.email, false);
+    assert.equal((await a('db', { op: 'email', to: 'medico@x.com', subject: 'A', text: 'B' })).status, 503);
+    process.env.SMTP_HOST = 'smtp.invalido.local'; process.env.SMTP_FROM = 'fat@empresa.com';
+    assert.equal((await a('auth', { action: 'status' })).body.email, true);
+    assert.equal((await a('db', { op: 'email', to: 'nao-e-email', subject: 'A', text: 'B' })).status, 400);
+  } finally { delete process.env.SMTP_HOST; delete process.env.SMTP_FROM; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('API: aceita SMPT_HOST (nome com P e T trocados)', async () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fm-mail2-'));
+  _setStorage(fsStorage(dir)); process.env.ADMIN_EMAILS = 'chefe@empresa.com';
+  const a = cliente();
+  try {
+    await a('auth', { action: 'setup', nome: 'Chefe', email: 'chefe@empresa.com', senha: 'senha-forte-1' });
+    process.env.SMPT_HOST = 'smtp.office365.com'; process.env.SMTP_FROM = 'fat@empresa.com';
+    assert.equal((await a('auth', { action: 'status' })).body.email, true);
+  } finally { delete process.env.SMPT_HOST; delete process.env.SMTP_FROM; rmSync(dir, { recursive: true, force: true }); }
+});
