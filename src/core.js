@@ -140,6 +140,16 @@ function numeroDocumento(ct,comp){ const {mm,yy}=mmYY(comp); return String(ct.nu
 function codReduzido(ct,comp){ const {mm,yy}=mmYY(comp); return String(ct.sigla||'')+mm+yy; }
 
 const RETENCOES_PADRAO={pis:0.65,cofins:3,csll:1,ir:1.5};
+const IMPOSTOS_FAT=[['ISS','impISS'],['PIS','impPIS'],['COFINS','impCOFINS'],['CSLL','impCSLL'],['IR','impIR']];
+/** Alíquotas (%) de impostos do contrato sobre o faturamento bruto. */
+function aliquotasContrato(ct){ const o={}; IMPOSTOS_FAT.forEach(([n,k])=>o[k]=num(ct&&ct[k])); return o; }
+/** Impostos sobre o faturamento bruto e faturamento líquido (FAT − IMPOSTOS). */
+function impostosFat(bruto, aliq){
+  const A=aliq||{};
+  const itens=IMPOSTOS_FAT.map(([n,k])=>({nome:n,pct:num(A[k]),valor:r2(bruto*num(A[k])/100)}));
+  const total=r2(itens.reduce((s,i)=>s+i.valor,0));
+  return {bruto:r2(bruto),itens,total,liquido:r2(bruto-total),pct:itens.reduce((s,i)=>s+i.pct,0)};
+}
 /** Retenções federais da NF de PJ não optante do Simples (PIS, COFINS, CSLL, IR) sobre o valor bruto. */
 function retencoesNF(bruto, taxas){
   const T=Object.assign({},RETENCOES_PADRAO,taxas||{});
@@ -207,4 +217,4 @@ function descricaoNF(tpl, calc, comp, ct, periodo){
   return String(tpl||'REFERENTE A PRESTAÇÃO DE SERVIÇOS MÉDICOS ({ESPECIALIDADES}) - PERÍODO {PERIODO}\n{ITENS}\nVALOR TOTAL {VALOR_TOTAL}').replace(/\{([A-Z_]+)\}/g,(m,k)=>ctx[k]!=null?ctx[k]:m);
 }
 
-export {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, retencoesNF, RETENCOES_PADRAO, brl, qtdTxt, periodoTxt, descricaoNF};
+export {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, IMPOSTOS_FAT, aliquotasContrato, impostosFat, retencoesNF, RETENCOES_PADRAO, brl, qtdTxt, periodoTxt, descricaoNF};

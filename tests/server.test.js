@@ -174,3 +174,47 @@ test('API: aceita SMPT_HOST (nome com P e T trocados)', async () => {
     assert.equal((await a('auth', { action: 'status' })).body.email, true);
   } finally { delete process.env.SMPT_HOST; delete process.env.SMTP_FROM; rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('e-mail pelo Microsoft Graph: token, envio e mensagens de erro', async () => {
+  const { _emailInterno } = await import('../server/api.js');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'fm-graph-'));
+  _setStorage(fsStorage(dir)); process.env.ADMIN_EMAILS = 'chefe@empresa.com';
+  Object.assign(process.env, { MS_TENANT_ID: 'tenant-1', MS_CLIENT_ID: 'app-1', MS_CLIENT_SECRET: 'segredo', MS_SENDER: 'faturamento@empresa.com', SMTP_HOST: 'smtp.office365.com', SMTP_FROM: 'x@y.com' });
+  const fetchOrig = globalThis.fetch; const chamadas = []; let modo = 'ok';
+  globalThis.fetch = async (url, o) => {
+    chamadas.push({ url: String(url), o });
+    if (String(url).includes('login.microsoftonline.com')) return new Response(JSON.stringify({ access_token: 'tok', expires_in: 3600 }), { status: 200 });
+    if (modo === 'ok') return new Response(null, { status: 202 });
+    if (modo === '403') return new Response(JSON.stringify({ error: { code: 'ErrorAccessDenied', message: 'Access is denied.' } }), { status: 403 });
+    return new Response(JSON.stringify({ error: { code: 'ResourceNotFound', message: 'User not found' } }), { status: 404 });
+  };
+  const a = cliente();
+  try {
+    _emailInterno.reset();
+    await a('auth', { action: 'setup', nome: 'Chefe', email: 'chefe@empresa.com', senha: 'senha-forte-1' });
+    const r = await a('db', { op: 'email', to: 'medico@x.com', subject: 'Solicitação de NF', text: 'Prezado(a) Dr(a) A.' });
+    assert.equal(r.status, 200);
+    const env = chamadas.find((c) => c.url.includes('/sendMail'));
+    assert.equal(env.url, 'https://graph.microsoft.com/v1.0/users/faturamento%40empresa.com/sendMail');
+    assert.equal(env.o.headers.Authorization, 'Bearer tok');
+    const corpo = JSON.parse(env.o.body);
+    assert.equal(corpo.message.toRecipients[0].emailAddress.address, 'medico@x.com');
+    assert.equal(corpo.message.replyTo[0].emailAddress.address, 'chefe@empresa.com');
+    assert.equal(corpo.message.body.contentType, 'Text');
+    assert.equal(corpo.saveToSentItems, true);
+    assert.ok(String(chamadas[0].o.body).includes('grant_type=client_credentials'));
+    // token reaproveitado
+    await a('db', { op: 'email', to: 'medico@x.com', subject: 'A', text: 'B' });
+    assert.equal(chamadas.filter((c) => c.url.includes('login.microsoftonline.com')).length, 1);
+    modo = '403';
+    const e1 = await a('db', { op: 'email', to: 'medico@x.com', subject: 'A', text: 'B' });
+    assert.equal(e1.status, 502); assert.match(e1.body.erro, /Mail\.Send/);
+    modo = '404';
+    const e2 = await a('db', { op: 'email', to: 'medico@x.com', subject: 'A', text: 'B' });
+    assert.match(e2.body.erro, /MS_SENDER/);
+  } finally {
+    globalThis.fetch = fetchOrig; _emailInterno.reset();
+    for (const k of ['MS_TENANT_ID', 'MS_CLIENT_ID', 'MS_CLIENT_SECRET', 'MS_SENDER', 'SMTP_HOST', 'SMTP_FROM']) delete process.env[k];
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

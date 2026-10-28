@@ -281,26 +281,88 @@ async function atualizarUsuario(st, id, fn) {
 }
 
 /* =============================== E-MAIL ===============================
- * Envio opcional por SMTP (ex.: Microsoft 365 smtp.office365.com:587, Gmail smtp.gmail.com:587).
- * Variáveis: SMTP_HOST, SMTP_PORT (587), SMTP_USER, SMTP_PASS, SMTP_FROM (remetente), SMTP_SECURE ("true" para porta 465).
+ * Dois jeitos de enviar (o primeiro configurado é usado):
+ *
+ * 1) Microsoft 365 pela API Microsoft Graph (recomendado; não depende do SMTP AUTH,
+ *    que a Microsoft está desligando). Variáveis:
+ *      MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET  → app registrado no Entra ID com
+ *                                                       permissão de aplicativo Mail.Send
+ *      MS_SENDER                                    → caixa que envia (ex.: faturamento@empresa.com.br)
+ *
+ * 2) SMTP (Gmail, outros provedores, ou Microsoft 365 com SMTP AUTH habilitado):
+ *      SMTP_HOST, SMTP_PORT (587), SMTP_USER, SMTP_PASS, SMTP_FROM, SMTP_SECURE ("true" na porta 465)
  */
+const env = (k) => String(process.env[k] || '').trim();
+const graphConfigurado = () => !!(env('MS_TENANT_ID') && env('MS_CLIENT_ID') && env('MS_CLIENT_SECRET') && env('MS_SENDER'));
 // aceita também SMPT_HOST (erro de digitação comum ao cadastrar a variável)
-const smtpHost = () => process.env.SMTP_HOST || process.env.SMPT_HOST || '';
-const emailConfigurado = () => !!(smtpHost() && process.env.SMTP_FROM);
+const smtpHost = () => env('SMTP_HOST') || env('SMPT_HOST');
+const smtpConfigurado = () => !!(smtpHost() && env('SMTP_FROM'));
+const emailConfigurado = () => graphConfigurado() || smtpConfigurado();
+
+let tokenGraph = null; // { valor, expira }
+async function obterTokenGraph() {
+  if (tokenGraph && tokenGraph.expira > Date.now() + 60000) return tokenGraph.valor;
+  const r = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(env('MS_TENANT_ID'))}/oauth2/v2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: env('MS_CLIENT_ID'), client_secret: env('MS_CLIENT_SECRET'), scope: 'https://graph.microsoft.com/.default', grant_type: 'client_credentials' }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.access_token) {
+    const d = j.error_description ? String(j.error_description).split('\r\n')[0] : r.status;
+    throw new HttpErro(502, 'Microsoft 365 recusou o acesso do aplicativo (confira MS_TENANT_ID, MS_CLIENT_ID e MS_CLIENT_SECRET): ' + d, 'unavailable');
+  }
+  tokenGraph = { valor: j.access_token, expira: Date.now() + (Number(j.expires_in) || 3600) * 1000 };
+  return tokenGraph.valor;
+}
+async function enviarPorGraph({ to, subject, text, replyTo }) {
+  const token = await obterTokenGraph();
+  const message = {
+    subject,
+    body: { contentType: 'Text', content: text },
+    toRecipients: [{ emailAddress: { address: to } }],
+    ...(replyTo ? { replyTo: [{ emailAddress: { address: replyTo } }] } : {}),
+  };
+  const r = await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(env('MS_SENDER'))}/sendMail`, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message, saveToSentItems: true }),
+  });
+  if (r.status === 202 || r.ok) return;
+  const j = await r.json().catch(() => ({}));
+  const msg = (j.error && j.error.message) || ('HTTP ' + r.status);
+  if (r.status === 401 || r.status === 403) tokenGraph = null;
+  const dica = r.status === 403 || /access is denied|Authorization_RequestDenied/i.test(msg)
+    ? ' Verifique se o app tem a permissão de aplicativo Mail.Send com consentimento do administrador.'
+    : r.status === 404 || /ResourceNotFound|MailboxNotEnabled/i.test(msg) ? ' Confira se MS_SENDER é uma caixa existente com licença do Exchange.' : '';
+  throw new HttpErro(502, 'Microsoft 365 recusou o envio: ' + msg + dica, 'unavailable');
+}
+
 let transporte = null;
-async function enviarEmail({ to, subject, text, replyTo }) {
-  if (!emailConfigurado()) throw new HttpErro(503, 'Envio de e-mail não configurado no servidor (variáveis SMTP_*).', 'no_email');
+async function enviarPorSmtp({ to, subject, text, replyTo }) {
   if (!transporte) {
     const nm = (await import('nodemailer')).default;
-    const port = Number(process.env.SMTP_PORT || 587);
+    const port = Number(env('SMTP_PORT') || 587);
     transporte = nm.createTransport({
       host: smtpHost(), port,
-      secure: String(process.env.SMTP_SECURE || (port === 465)).toLowerCase() === 'true',
-      auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+      secure: String(env('SMTP_SECURE') || (port === 465)).toLowerCase() === 'true',
+      auth: env('SMTP_USER') ? { user: env('SMTP_USER'), pass: process.env.SMTP_PASS } : undefined,
     });
   }
-  return transporte.sendMail({ from: process.env.SMTP_FROM, to, subject, text, replyTo });
+  try { return await transporte.sendMail({ from: env('SMTP_FROM'), to, subject, text, replyTo }); }
+  catch (e) {
+    const m = String((e && e.message) || e);
+    if (/SmtpClientAuthentication is disabled/i.test(m)) throw new HttpErro(502, 'O Microsoft 365 da empresa está com o envio por SMTP desligado. Configure o envio pela API do Microsoft 365 (variáveis MS_*, veja o README) ou peça ao administrador para habilitar o SMTP autenticado.', 'unavailable');
+    throw new HttpErro(502, 'O servidor de e-mail recusou o envio: ' + m, 'unavailable');
+  }
 }
+
+async function enviarEmail(msg) {
+  if (graphConfigurado()) return enviarPorGraph(msg);
+  if (smtpConfigurado()) return enviarPorSmtp(msg);
+  throw new HttpErro(503, 'Envio de e-mail não configurado no servidor (variáveis MS_* ou SMTP_*).', 'no_email');
+}
+export const _emailInterno = { obterTokenGraph, enviarPorGraph, reset() { tokenGraph = null; transporte = null; } };
 
 /* ================================= DB ================================= */
 const LIMITE_RESPOSTA = 3_000_000; // ~3 MB por resposta (limite das Functions é 4,5 MB)

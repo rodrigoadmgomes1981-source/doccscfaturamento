@@ -80,17 +80,39 @@ git push -u origin main
 Os botões ✉ (demonstrativo de horas e valores) e **NF** (solicitação de NF a médicos PJ) ficam no detalhamento do fechamento e na folha.
 
 - **Sem configuração:** o botão abre o e-mail pronto no programa de e-mail de quem está usando, ou copia o texto.
-- **Com configuração:** para o sistema enviar sozinho, cadastre na Vercel (Settings › Environment Variables) e faça um *Redeploy*:
+- **Com configuração:** o sistema envia sozinho. Há dois jeitos:
 
-| Variável | Exemplo (Microsoft 365) |
+#### Microsoft 365 pela API Microsoft Graph (recomendado)
+
+Funciona mesmo com o *SMTP AUTH* desligado na empresa. A Microsoft está aposentando o envio por SMTP com usuário e senha.
+
+1. Em <https://entra.microsoft.com>, abra **Identidade › Aplicativos › Registros de aplicativo › Novo registro**. Nome: *Faturamento Médico*. Tipo de conta: *somente este diretório*.
+2. Na página do aplicativo, copie o **ID do aplicativo (cliente)** e o **ID do diretório (locatário)**.
+3. Em **Certificados e segredos › Novo segredo do cliente**, copie o **Valor** e anote a data de validade.
+4. Em **Permissões de API › Adicionar › Microsoft Graph › Permissões de aplicativo**, marque **Mail.Send** e clique em **Conceder consentimento do administrador**.
+5. **Recomendado:** peça ao TI para restringir o aplicativo a enviar só pela caixa do faturamento (*RBAC for Applications* ou *Application Access Policy* no Exchange Online). Sem isso, a permissão Mail.Send vale para qualquer caixa da empresa.
+6. Na Vercel (Settings › Environment Variables), cadastre as variáveis abaixo e faça um *Redeploy*:
+
+| Variável | Valor |
 |---|---|
-| `SMTP_HOST` | `smtp.office365.com` |
+| `MS_TENANT_ID` | ID do diretório (locatário) |
+| `MS_CLIENT_ID` | ID do aplicativo (cliente) |
+| `MS_CLIENT_SECRET` | valor do segredo do cliente |
+| `MS_SENDER` | caixa que envia, ex.: `faturamento@empresa.com.br` |
+
+O e-mail sai por essa caixa, fica salvo nos *Itens enviados* e tem "responder para" o e-mail de quem clicou em enviar. Quando o segredo vencer, gere outro e troque `MS_CLIENT_SECRET`.
+
+#### SMTP (Gmail, outros provedores, ou Microsoft 365 com SMTP AUTH habilitado)
+
+| Variável | Exemplo |
+|---|---|
+| `SMTP_HOST` | `smtp.office365.com` / `smtp.gmail.com` |
 | `SMTP_PORT` | `587` |
 | `SMTP_USER` | `faturamento@empresa.com.br` |
-| `SMTP_PASS` | senha da caixa (ou senha de app) |
+| `SMTP_PASS` | senha (ou senha de app) |
 | `SMTP_FROM` | `Faturamento DOC <faturamento@empresa.com.br>` |
 
-O e-mail sai pela conta configurada, com "responder para" o e-mail de quem clicou em enviar. No Microsoft 365, a caixa precisa ter o *SMTP autenticado* habilitado (Centro de administração › Usuários › Email › Gerenciar aplicativos de email).
+Se as variáveis `MS_*` estiverem preenchidas, o sistema usa o Microsoft Graph e ignora o SMTP.
 
 > **Plano da Vercel.** O plano *Hobby* é para uso pessoal e não comercial, e o Blob gratuito tem limite de **2.000 gravações por mês**. Se o limite estourar, o Blob fica bloqueado por 30 dias. Para uso na empresa, use o plano **Pro**. Nele o consumo deste sistema custa centavos por mês.
 

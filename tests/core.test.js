@@ -146,3 +146,12 @@ test('meta escolhida usa os valores da meta; sem valor na meta usa o padrão', (
   assert.equal(mn.vFat, 150); assert.equal(mn.totPag, 1666.67);
   assert.equal(calcular(f, ct).linhas[0].vFat, 189.38);
 });
+
+test('faturamento líquido = faturamento − impostos do contrato', async () => {
+  const { impostosFat, aliquotasContrato } = await import('../src/core.js');
+  const a = aliquotasContrato({ impISS: 5, impPIS: 0.65, impCOFINS: '3', impCSLL: 1, impIR: '1,5' });
+  const r = impostosFat(323461.04, a);
+  assert.deepEqual(r.itens.map((i) => i.valor), [16173.05, 2102.5, 9703.83, 3234.61, 4851.92]);
+  assert.equal(r.total, 36065.91); assert.equal(r.liquido, 287395.13);
+  assert.equal(impostosFat(1000, aliquotasContrato({})).liquido, 1000);
+});
