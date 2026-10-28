@@ -82,10 +82,47 @@ function sugerirItem(sk, itens){
 }
 function baseQtd(unid,g){ return unid==='hora'? g.apur : unid==='plantao'? g.na : 0; }
 
+/* ---------- tabelas de valores do contrato (original, reajustes, aditivos) ---------- */
+/** Tabelas do contrato. Contratos sem tabelas: uma tabela original com os itens atuais. */
+function tabelasDoContrato(ct){
+  if(ct&&Array.isArray(ct.tabelas)&&ct.tabelas.length) return ct.tabelas;
+  return [{id:'t_original',nome:'Tabela original do contrato',tipo:'original',vigencia:String((ct&&ct.vigIni)||'').slice(0,7),itens:(ct&&ct.itens)||[]}];
+}
+/** Tabela vigente na competência AAAA-MM: a de vigência mais recente que não seja posterior à competência. Sem competência: a mais recente. */
+function tabelaVigente(ct, comp){
+  const ts=tabelasDoContrato(ct).slice().sort((a,b)=>String(a.vigencia||'').localeCompare(String(b.vigencia||'')));
+  let t=ts[0]; for(const x of ts){ if(!x.vigencia||!comp||x.vigencia<=comp) t=x; }
+  return t||{id:'',nome:'',vigencia:'',itens:[]};
+}
+function itensVigentes(ct, comp){ return tabelaVigente(ct,comp).itens||[]; }
+/** Todos os itens já usados em qualquer tabela (para vínculos de setor e valores diferenciados). */
+function itensUniao(ct){
+  const m=new Map();
+  tabelasDoContrato(ct).slice().sort((a,b)=>String(a.vigencia||'').localeCompare(String(b.vigencia||''))).forEach(t=>(t.itens||[]).forEach(i=>m.set(i.id,i)));
+  return [...m.values()];
+}
+/** Diferenças de valores (faturar, pagar e metas) entre duas versões dos itens de uma tabela. */
+function diffValores(antes, depois){
+  const out=[]; const A=Object.fromEntries((antes||[]).map(i=>[i.id,i])), B=Object.fromEntries((depois||[]).map(i=>[i.id,i]));
+  const lab=i=>(i.especialidade||'?')+' · '+(i.tipo||'?');
+  for(const id of Object.keys(B)){ const b=B[id], a=A[id];
+    if(!a){ if(num(b.valorFaturar)||num(b.valorPagar)) out.push({item:lab(b),campo:'item novo',de:null,para:null,texto:'faturar '+brl(num(b.valorFaturar))+' / pagar '+brl(num(b.valorPagar))}); continue; }
+    for(const [f,n] of [['valorFaturar','valor a faturar'],['valorPagar','valor a pagar']]) if(num(a[f])!==num(b[f])) out.push({item:lab(b),campo:n,de:num(a[f]),para:num(b[f])});
+    for(const [m,mn] of [['minima','mínima'],['mediana','mediana'],['maxima','máxima']]) for(const [f,n] of [['valorFaturar','a faturar'],['valorPagar','a pagar']]){
+      const va=num(a.metas&&a.metas[m]&&a.metas[m][f]), vb=num(b.metas&&b.metas[m]&&b.metas[m][f]);
+      if(va!==vb) out.push({item:lab(b),campo:'meta '+mn+' '+n,de:va,para:vb});
+    }
+  }
+  for(const id of Object.keys(A)) if(!B[id]&&(num(A[id].valorFaturar)||num(A[id].valorPagar))) out.push({item:lab(A[id]),campo:'item removido',de:null,para:null,texto:'removido'});
+  return out;
+}
+
 /** Calcula as linhas do fechamento (médico x item) aplicando cadastro, valores diferenciados e ajustes da conferência. */
 function calcular(fech, contrato){
   if(fech.congelado&&fech.congelado.calc) return fech.congelado.calc;
-  const itens=contrato&&contrato.itens||[];
+  // valores da tabela vigente na competência do fechamento (original, reajuste ou aditivo)
+  const tabV=contrato? tabelaVigente(contrato, fech.competencia) : {itens:[]};
+  const itens=tabV.itens||[];
   const itMap=Object.fromEntries(itens.map(i=>[i.id,i]));
   const map=Object.fromEntries((contrato&&contrato.mapeamento||[]).map(m=>[m.s,m.item]));
   const dif={}; for(const d of (contrato&&contrato.diferenciados||[])) if(d.crm&&d.item) dif[crmDigits(crmKey(d.crm))+'|'+d.item]=num(d.valorPagar);
@@ -131,7 +168,7 @@ function calcular(fech, contrato){
   Object.keys(tot).forEach(k=>tot[k]= /tot/.test(k)? r2(tot[k]) : r4(tot[k]));
   tot.margem=r2(tot.totFat-tot.totPag); tot.pctPag= tot.totFat? tot.totPag/tot.totFat : null;
   tot.conferidos=linhas.filter(l=>l.conferido).length; tot.linhas=linhas.length;
-  return {linhas, porItem, totais:tot, naoMapeados:Object.entries(naoMap).map(([s,n])=>({s,n}))};
+  return {tabela:{id:tabV.id||'',nome:tabV.nome||'',vigencia:tabV.vigencia||''}, linhas, porItem, totais:tot, naoMapeados:Object.entries(naoMap).map(([s,n])=>({s,n}))};
 }
 
 function mmYY(comp){ const [y,m]=String(comp).split('-'); return {mm:m, yy:String(y).slice(2), y, m}; }
@@ -217,4 +254,4 @@ function descricaoNF(tpl, calc, comp, ct, periodo){
   return String(tpl||'REFERENTE A PRESTAÇÃO DE SERVIÇOS MÉDICOS ({ESPECIALIDADES}) - PERÍODO {PERIODO}\n{ITENS}\nVALOR TOTAL {VALOR_TOTAL}').replace(/\{([A-Z_]+)\}/g,(m,k)=>ctx[k]!=null?ctx[k]:m);
 }
 
-export {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, IMPOSTOS_FAT, aliquotasContrato, impostosFat, retencoesNF, RETENCOES_PADRAO, brl, qtdTxt, periodoTxt, descricaoNF};
+export {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, tabelasDoContrato, tabelaVigente, itensVigentes, itensUniao, diffValores, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, IMPOSTOS_FAT, aliquotasContrato, impostosFat, retencoesNF, RETENCOES_PADRAO, brl, qtdTxt, periodoTxt, descricaoNF};

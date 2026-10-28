@@ -155,3 +155,32 @@ test('faturamento líquido = faturamento − impostos do contrato', async () => 
   assert.equal(r.total, 36065.91); assert.equal(r.liquido, 287395.13);
   assert.equal(impostosFat(1000, aliquotasContrato({})).liquido, 1000);
 });
+
+test('tabelas de valores: escolhe a vigente pela competência e calcula com ela', async () => {
+  const { tabelaVigente, itensUniao, diffValores } = await import('../src/core.js');
+  const orig = ctPAP.itens;
+  const reaj = orig.map((i) => ({ ...i, valorFaturar: 200, valorPagar: 175 }));
+  const adit = [...reaj, { id: 'neo', especialidade: 'Neonatologia', tipo: 'UTI', unidadePag: 'hora', unidadeFat: 'hora', valorFaturar: 300, valorPagar: 250 }];
+  const ct = { ...ctPAP, tabelas: [
+    { id: 't0', nome: 'Original', tipo: 'original', vigencia: '', itens: orig },
+    { id: 't2', nome: '1º aditivo', tipo: 'aditivo', vigencia: '2026-11', itens: adit },
+    { id: 't1', nome: 'Reajuste', tipo: 'reajuste', vigencia: '2026-09', itens: reaj },
+  ] };
+  assert.equal(tabelaVigente(ct, '2026-07').id, 't0');
+  assert.equal(tabelaVigente(ct, '2026-09').id, 't1');
+  assert.equal(tabelaVigente(ct, '2026-10').id, 't1');
+  assert.equal(tabelaVigente(ct, '2027-01').id, 't2');
+  assert.equal(tabelaVigente(ct).id, 't2');
+  assert.equal(itensUniao(ct).length, 3);
+  const f = { base: [{ k: '1', s: 'PAP | PACS', n: 1, na: 1, plan: 10, real: 10, apur: 10, vApur: 0 }], medicos: { 1: { nome: 'A', crm: '1' } } };
+  assert.equal(calcular({ ...f, competencia: '2026-07' }, ct).totais.totFat, 1893.8);
+  const set = calcular({ ...f, competencia: '2026-09' }, ct);
+  assert.equal(set.totais.totFat, 2000); assert.equal(set.totais.totPag, 1750); assert.equal(set.tabela.nome, 'Reajuste');
+  // contrato antigo sem tabelas continua igual
+  assert.equal(calcular({ ...f, competencia: '2026-09' }, ctPAP).totais.totFat, 1893.8);
+  // diferenças
+  const d = diffValores(orig, adit);
+  assert.equal(d.filter((x) => x.campo === 'valor a faturar').length, 2);
+  assert.equal(d.filter((x) => x.campo === 'item novo').length, 1);
+  assert.equal(diffValores(orig, JSON.parse(JSON.stringify(orig))).length, 0);
+});

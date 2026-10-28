@@ -1,4 +1,4 @@
-import {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, IMPOSTOS_FAT, aliquotasContrato, impostosFat, retencoesNF, RETENCOES_PADRAO, brl, qtdTxt, periodoTxt, descricaoNF} from './core.js';
+import {UNIDADES, VINCULOS, TIPO_PAG, NATUREZAS_PADRAO, normTxt, num, r2, r4, crmKey, crmDigits, safeKey, cellStr, parsePega, periodoMeses, compDoPeriodo, setorKey, agregar, sugerirItem, baseQtd, tabelasDoContrato, tabelaVigente, itensVigentes, itensUniao, diffValores, calcular, mmYY, ultimoDiaMesSeguinte, numeroDocumento, codReduzido, calcFolha, IMPOSTOS_FAT, aliquotasContrato, impostosFat, retencoesNF, RETENCOES_PADRAO, brl, qtdTxt, periodoTxt, descricaoNF} from './core.js';
 
 /* ============================================================
    APP
@@ -296,7 +296,7 @@ function tabConf(f,ct,c){
   if(f.devolucao&&st==='conferencia') out+='<div class="banner warn"><div><b>Devolvido para ajuste</b> por '+esc(nomeDe(f.devolucao.por))+' em '+fDT(f.devolucao.em)+': '+esc(f.devolucao.motivo)+'</div></div>';
   if(L) out+='<div class="banner ok"><div><b>Relatório travado.</b> Aprovado por '+esc(nomeDe(f.aprovadoPor))+' em '+fDT(f.t.aprovado)+'. As quantidades e valores abaixo estão congelados.</div></div>';
   if(c.naoMapeados.length){
-    const itens=ct.itens||[];
+    const itens=itensUniao(ct);
     out+='<div class="card" style="border-color:var(--warn)"><h3>Setores do Pega Plantão sem vínculo com o contrato</h3><p class="muted">Escolha a especialidade e tipo do contrato para cada setor, ou marque “Não faturar”. O vínculo fica salvo no contrato para os próximos meses.</p><div class="tbl"><table><thead><tr><th>Local | Setor no Pega Plantão</th><th class="n">Plantões</th><th>Item do contrato</th></tr></thead><tbody>'+
       c.naoMapeados.map((m,i)=>'<tr><td>'+esc(m.s)+'</td><td class="n">'+m.n+'</td><td><select id="mp'+i+'" data-chg="mapFech" data-s="'+esc(m.s)+'"'+((can('conferir')||can('contratos'))&&!L?'':' disabled')+'><option value="">Escolha…</option>'+itens.map(it=>'<option value="'+it.id+'"'+(sugerirItem(m.s,itens)===it.id?' data-sug="1"':'')+'>'+esc(it.especialidade+' — '+it.tipo)+'</option>').join('')+'<option value="__ignorar">Não faturar (ignorar)</option></select></td></tr>').join('')+
       '</tbody></table></div>'+(itens.length?'':'<p class="muted">O contrato ainda não tem itens. Cadastre especialidades e tipos em Contratos.</p>')+'</div>';
@@ -304,7 +304,7 @@ function tabConf(f,ct,c){
   if(!L){
     // itens com linhas sem valor a pagar ou a faturar (considera o valor que de fato ficou na linha)
     const semIds=new Set(c.linhas.filter(l=>!l.vPag||!l.vFat).map(l=>l.itemId));
-    const semV=(ct.itens||[]).filter(i=>semIds.has(i.id));
+    const semV=itensVigentes(ct,f.competencia).filter(i=>semIds.has(i.id));
     if(semV.length){ const edCt=can('contratos');
       out+='<div class="card" style="border-color:var(--warn);background:var(--warn-soft)"><div class="row"><div class="grow"><b style="color:var(--warn)">'+semV.length+' item(ns) do contrato sem valor a pagar ou a faturar</b><div class="muted" style="font-size:.86rem">'+(edCt?'Informe os valores abaixo: eles são gravados no contrato e o fechamento é recalculado na hora.':'Peça a quem cadastra contratos para informar os valores.')+' O relatório do Pega Plantão não trouxe valor/hora para estas linhas.</div></div>'+(edCt?'<button class="btn sm" data-act="editCt" data-id="'+esc(ct.id)+'">Abrir contrato completo</button>':'')+'</div>'+
         '<div class="tbl" style="margin-top:10px"><table><thead><tr><th>Especialidade · tipo/local</th><th>Unidade</th><th class="n">Valor a pagar (R$)</th><th class="n">Valor a faturar (R$)</th></tr></thead><tbody>'+
@@ -313,9 +313,10 @@ function tabConf(f,ct,c){
           '<td class="n">'+(edCt?'<input type="text" inputmode="decimal" autocomplete="off" id="iv_f_'+esc(i.id)+'" value="'+dec(num(i.valorFaturar)||'')+'" placeholder="0,00" data-chg="itemValor" data-item="'+esc(i.id)+'" data-f="valorFaturar">':brl(num(i.valorFaturar)))+'</td></tr>').join('')+
         '</tbody></table></div></div>'; }
   }
-  { const temMetas=(ct.itens||[]).some(i=>i.metas&&['minima','mediana','maxima'].some(m=>i.metas[m]&&(num(i.metas[m].valorFaturar)||num(i.metas[m].valorPagar))));
+  { const temMetas=itensVigentes(ct,f.competencia).some(i=>i.metas&&['minima','mediana','maxima'].some(m=>i.metas[m]&&(num(i.metas[m].valorFaturar)||num(i.metas[m].valorPagar))));
     const metaAtual=(L&&f.congelado&&f.congelado.meta!=null)?f.congelado.meta:(f.meta||''); const pode=!L&&can('conferir');
-    out+='<div class="card row" style="padding:12px 16px"><div class="grow"><b>Meta do fechamento</b><div class="muted" style="font-size:.84rem">'+(temMetas?'Define quais valores a faturar e a pagar do contrato entram no cálculo.':'Este contrato ainda não tem valores por meta. Cadastre em Contratos › Metas.')+'</div></div><div class="seg" role="group" aria-label="Meta do fechamento">'+
+    const tbU=(L&&f.congelado&&f.congelado.tabela)||tabelaVigente(ct,f.competencia);
+    out+='<div class="card row" style="padding:12px 16px"><div class="grow"><b>Meta do fechamento</b> <span class="tag" title="Tabela de valores do contrato usada nesta competência">Tabela: '+esc(tbU.nome||'original')+(tbU.vigencia?' · desde '+compTxt(tbU.vigencia):'')+'</span><div class="muted" style="font-size:.84rem">'+(temMetas?'Define quais valores a faturar e a pagar do contrato entram no cálculo.':'Este contrato ainda não tem valores por meta. Cadastre em Contratos › Metas.')+'</div></div><div class="seg" role="group" aria-label="Meta do fechamento">'+
       [['','Valores padrão'],['minima','Mínima'],['mediana','Mediana'],['maxima','Máxima']].map(([m,lab])=>'<button data-act="setMeta" data-m="'+m+'" aria-pressed="'+(metaAtual===m)+'"'+(pode&&(temMetas||!m)?'':' disabled')+'>'+lab+'</button>').join('')+'</div></div>'; }
   const q=normTxt(S.conf.q);
   const linhas=c.linhas.filter(l=>!q||normTxt(l.nome+' '+l.crm+' '+l.esp+' '+l.tipo).includes(q));
@@ -348,7 +349,7 @@ function tabConf(f,ct,c){
   // ações de fluxo
   const pend=c.totais.linhas-c.totais.conferidos; const semJust=c.linhas.filter(l=>l.ajustado&&!l.just).length;
   if(st==='conferencia'&&can('conferir')){
-    const bloqueio = c.naoMapeados.length? 'Há setores sem vínculo com o contrato.' : pend? pend+' linha(s) ainda não conferida(s).' : semJust? semJust+' ajuste(s) sem justificativa.' : (ct.itens||[]).some(i=>!num(i.valorFaturar))? 'Há itens do contrato com valor a faturar zerado.' : '';
+    const bloqueio = c.naoMapeados.length? 'Há setores sem vínculo com o contrato.' : pend? pend+' linha(s) ainda não conferida(s).' : semJust? semJust+' ajuste(s) sem justificativa.' : itensVigentes(ct,f.competencia).some(i=>!num(i.valorFaturar))? 'Há itens do contrato com valor a faturar zerado.' : '';
     out+='<div class="card row"><div class="grow"><b>Enviar para aprovação</b><div class="muted">'+(bloqueio?esc(bloqueio):'Tudo conferido. O aprovador recebe o relatório para travar.')+'</div></div><button class="btn pri" data-act="enviarAprov"'+(c.naoMapeados.length||pend||semJust?' disabled':'')+'>Enviar para aprovação</button></div>';
   }
   if(st==='aguardando'){
@@ -452,13 +453,15 @@ function viewContratos(){
   const cs=S.contratos||[];
   const head='<div class="head"><div><div class="eyebrow">Cadastros</div><h1>Contratos</h1><p>Valores a pagar e a faturar por especialidade e tipo/local, unidade de medida e dados para NF e ERP.</p></div>'+(can('contratos')?'<button class="btn pri" data-act="novoCt">Novo contrato</button>':'')+'</div>';
   if(!cs.length) return head+emptyState('Nenhum contrato cadastrado','Cadastre o contrato com seus itens (especialidade, tipo/local, unidade, valores) antes de importar o primeiro relatório.');
-  return head+'<div class="tbl"><table><thead><tr><th>CR</th><th>Contrato</th><th>Nº</th><th>Empresa</th><th class="n">Itens</th><th class="n">Contratado/mês</th><th class="n">Valor global</th><th>Vigência</th><th>Pendências</th><th></th></tr></thead><tbody>'+
+  return head+'<div class="tbl"><table><thead><tr><th>CR</th><th>Contrato</th><th>Nº</th><th>Empresa</th><th>Tabela vigente</th><th class="n">Itens</th><th class="n">Contratado/mês</th><th class="n">Valor global</th><th>Vigência</th><th>Pendências</th></tr></thead><tbody>'+
     cs.map(c=>{const it=c.itens||[]; const pend=[]; if(it.some(i=>!num(i.valorFaturar))) pend.push('valor a faturar'); if(it.some(i=>!num(i.valorPagar)&&i.fontePag!=='pega')) pend.push('valor a pagar'); if(!c.tomador) pend.push('dados NF');
-      return '<tr><td class="mono"><b>'+esc(c.sigla)+'</b></td><td>'+esc(c.nome)+(c.ativo===false?' <span class="tag">inativo</span>':'')+'</td><td class="mono">'+esc((c.numero||'')+(c.ano||''))+'</td><td>'+esc(c.empresa)+'</td><td class="n">'+it.length+'</td><td class="n">'+fH(it.reduce((s,i)=>s+num(i.qtdMes),0))+'</td><td class="n">'+(num(c.valorGlobal)?brl(num(c.valorGlobal)):'—')+'</td><td>'+(c.vigIni?fD(c.vigIni)+' a '+fD(c.vigFim):'—')+'</td><td>'+(pend.length?pend.map(p=>'<span class="tag warn">'+p+'</span>').join(' '):'<span class="tag">ok</span>')+'</td><td><button class="btn sm" data-act="editCt" data-id="'+c.id+'">'+(can('contratos')?'Editar':'Ver')+'</button></td></tr>';}).join('')+'</tbody></table></div>';
+      const tv=tabelaVigente(c,mesAtual());
+      return '<tr><td class="mono" style="white-space:nowrap"><b>'+esc(c.sigla)+'</b> <button class="btn sm" data-act="editCt" data-id="'+c.id+'" style="margin-left:6px">'+(can('contratos')?'Editar':'Ver')+'</button></td><td>'+esc(c.nome)+(c.ativo===false?' <span class="tag">inativo</span>':'')+'</td><td class="mono">'+esc((c.numero||'')+(c.ano||''))+'</td><td>'+esc(c.empresa)+'</td><td>'+esc(tv.nome||'Tabela original')+(tv.vigencia?' <span class="muted">· desde '+compTxt(tv.vigencia)+'</span>':'')+(tabelasDoContrato(c).length>1?' <span class="tag">'+tabelasDoContrato(c).length+' tabelas</span>':'')+'</td><td class="n">'+it.length+'</td><td class="n">'+fH(it.reduce((s,i)=>s+num(i.qtdMes),0))+'</td><td class="n">'+(num(c.valorGlobal)?brl(num(c.valorGlobal)):'—')+'</td><td>'+(c.vigIni?fD(c.vigIni)+' a '+fD(c.vigFim):'—')+'</td><td>'+(pend.length?pend.map(p=>'<span class="tag warn">'+p+'</span>').join(' '):'<span class="tag">ok</span>')+'</td></tr>';}).join('')+'</tbody></table></div>';
 }
 function novoContrato(){ return {id:'',sigla:'',nome:'',numero:'',ano:'',centroResultado:'',empresa:'',codEmpresaPagadora:'',codEmpresaFat:'',responsavel:'',vigIni:'',vigFim:'',valorGlobal:0,qtdGlobal:0,ativo:true,ufCrm:'',
   tomador:'',cnpj:'',endereco:'',municipio:'',cidadeISS:'',parceiro:'',tipoOperacao:'',produtoServico:'',empenho:'Não possui',descricaoNF:'REFERENTE A PRESTAÇÃO DE SERVIÇOS MÉDICOS NA ESPECIALIDADE DE {ESPECIALIDADES} - PERIODO {PERIODO} - QUANTIDADE DE {UNIDADE} EXECUTADAS {QTD_TOTAL}, VALOR UNITÁRIO {VALOR_UNITARIO}, TOTALIZANDO {VALOR_TOTAL}.',
-  vinculoPadrao:'SOCIO',taxaSocio:150,taxaSocioMinHoras:24,alertaValor:20000,itens:[],diferenciados:[],mapeamento:[]}; }
+  vinculoPadrao:'SOCIO',taxaSocio:150,taxaSocioMinHoras:24,alertaValor:20000,itens:[],diferenciados:[],mapeamento:[],
+  tabelas:[{id:'t_original',nome:'Tabela original do contrato',tipo:'original',vigencia:'',itens:[]}],historico:[]}; }
 function viewContratoEd(){
   const d=S.draft; if(!d) return emptyState('Nada em edição','','<button class="btn" data-act="nav" data-v="ct">Voltar</button>');
   const ed=can('contratos'); const dis=ed?'':' disabled';
@@ -470,20 +473,31 @@ function viewContratoEd(){
     '<label class="f">Empresa contratada / pagadora<input list="empList" type="text" id="ct_empresa" value="'+esc(d.empresa)+'" data-chg="ct" data-f="empresa"'+dis+'><datalist id="empList">'+empOpts.map(e=>'<option value="'+esc(e.sigla)+'">'+esc(e.razao+' ('+e.cod+')')+'</option>').join('')+'</datalist></label>'+
     fld('responsavel','Responsável pelo fechamento')+fld('vigIni','Início da vigência','','date')+fld('vigFim','Fim da vigência','','date')+fld('valorGlobal','Valor global do contrato (R$)','','number')+fld('qtdGlobal','Quantidade global (h/unid.)','','number')+fld('ufCrm','UF padrão do CRM')+
     '<label class="f chk"><input type="checkbox" id="ct_ativo" data-chg="ctChk" data-f="ativo"'+(d.ativo!==false?' checked':'')+dis+'> Contrato ativo</label></div></div>';
-  out+='<div class="card"><div class="row"><h2 class="grow">Especialidades, tipos e valores</h2>'+(ed?'<button class="btn sm" data-act="addItem">Adicionar item</button>':'')+'</div><p class="muted">Cada item é uma especialidade + tipo/local com sua unidade de medida para pagamento e faturamento. Fonte “Pega Plantão” usa o valor/hora configurado no relatório para o pagamento.</p>'+
+  const tabs=d.tabelas||[]; const tSel=tabs.find(t=>t.id===d.tabSel)||tabs[0]||{}; const salvo=d.id&&ctById(d.id); const tSalva=salvo&&tabelasDoContrato(salvo).find(t=>t.id===tSel.id);
+  const vigTxt=v=>v?compTxt(v):'início do contrato'; const TIPOS_TAB={original:'Original',reajuste:'Reajuste',aditivo:'Aditivo'};
+  const tAtual=tabelaVigente(d,mesAtual());
+  out+='<div class="card"><div class="row"><h2 class="grow">Especialidades, tipos e valores</h2>'+(ed&&d.id?'<button class="btn sm" data-act="novaTabela" data-tipo="reajuste">Novo reajuste</button><button class="btn sm" data-act="novaTabela" data-tipo="aditivo">Novo aditivo</button>':'')+(ed?'<button class="btn sm" data-act="addItem">Adicionar item</button>':'')+'</div>'+
+    '<div class="fields" style="margin:4px 0 12px"><label class="f">Tabela em edição<select id="tabSel" data-chg="tabSel">'+tabs.slice().sort((a,b)=>String(a.vigencia||'').localeCompare(String(b.vigencia||''))).map(t=>'<option value="'+esc(t.id)+'"'+(t.id===tSel.id?' selected':'')+'>'+esc((t.nome||'Sem nome')+' — '+(TIPOS_TAB[t.tipo]||'')+' — a partir de '+vigTxt(t.vigencia))+(t.id===tAtual.id?' (vigente)':'')+'</option>').join('')+'</select></label>'+
+    '<label class="f w2">Nome da tabela<input type="text" id="tabNome" value="'+esc(tSel.nome||'')+'" data-chg="tabCampo" data-f="nome" placeholder="Ex.: Tabela original do contrato · Reajuste IPCA 2026 · 1º Termo aditivo"'+dis+'></label>'+
+    '<label class="f">Tipo<select id="tabTipo" data-chg="tabCampo" data-f="tipo"'+dis+'>'+Object.entries(TIPOS_TAB).map(([k,v])=>'<option value="'+k+'"'+(tSel.tipo===k?' selected':'')+'>'+v+'</option>').join('')+'</select></label>'+
+    (tSalva||d.id? '<div class="f"><span>Vigente a partir de</span><b style="color:var(--fg);padding-top:6px">'+vigTxt(tSel.vigencia)+'</b></div>' : '<label class="f">Vigente a partir de<input type="month" id="tabVig" value="'+esc(tSel.vigencia||'')+'" data-chg="tabCampo" data-f="vigencia"'+dis+'></label>')+'</div>'+
+    '<p class="muted" style="margin-top:0">Ao alterar valores a pagar, a faturar ou metas de uma tabela já salva, o sistema pergunta a partir de quando valem: cria um reajuste/aditivo ou corrige a tabela. Alterações retroativas exigem justificativa e ficam no histórico.</p>'+
+    '<p class="muted">Cada item é uma especialidade + tipo/local com sua unidade de medida para pagamento e faturamento. Fonte “Pega Plantão” usa o valor/hora configurado no relatório para o pagamento.</p>'+
     '<div class="tbl" data-keep="cti"><table><thead><tr><th>Especialidade</th><th>Metas</th><th>Tipo / local</th><th>Unid. pagamento</th><th>Unid. faturamento</th><th class="n">Qtd contratada/mês</th><th class="n">Valor a faturar</th><th class="n">Valor a pagar</th><th>Fonte pagamento</th><th></th></tr></thead><tbody>'+
     (d.itens.length?d.itens.map((it,i)=>{const sel=(f,opts)=>'<select id="it'+i+f+'" data-chg="it" data-i="'+i+'" data-f="'+f+'"'+dis+'>'+opts.map(o=>'<option value="'+o[0]+'"'+(it[f]===o[0]?' selected':'')+'>'+o[1]+'</option>').join('')+'</select>'; const U=Object.entries(UNIDADES);
       return '<tr><td><input type="text" id="it'+i+'esp" value="'+esc(it.especialidade)+'" data-chg="it" data-i="'+i+'" data-f="especialidade"'+dis+'></td><td>'+(()=>{const n=['minima','mediana','maxima'].filter(m=>it.metas&&it.metas[m]&&(num(it.metas[m].valorFaturar)||num(it.metas[m].valorPagar))).length; return '<button class="btn sm" data-act="toggleMetas" data-i="'+i+'" aria-expanded="'+!!S.metaOpen[i]+'">'+(n?n+' meta'+(n>1?'s':''):'Definir')+' '+(S.metaOpen[i]?'▾':'▸')+'</button>';})()+'</td><td><input type="text" id="it'+i+'tp" value="'+esc(it.tipo)+'" data-chg="it" data-i="'+i+'" data-f="tipo"'+dis+'></td><td>'+sel('unidadePag',U)+'</td><td>'+sel('unidadeFat',U)+'</td>'+
         '<td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'q" value="'+dec((it.qtdMes||0))+'" data-chg="it" data-i="'+i+'" data-f="qtdMes"'+dis+'></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'vf" value="'+dec((it.valorFaturar||0))+'" data-chg="it" data-i="'+i+'" data-f="valorFaturar"'+dis+(num(it.valorFaturar)?'':' style="border-color:var(--warn)"')+'></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="it'+i+'vp" value="'+dec((it.valorPagar||0))+'" data-chg="it" data-i="'+i+'" data-f="valorPagar"'+dis+'></td>'+
         '<td>'+sel('fontePag',[['cadastro','Cadastro'],['pega','Pega Plantão']])+'</td><td>'+(ed?'<button class="btn ghost sm" data-act="rmItem" data-i="'+i+'" aria-label="Remover item">✕</button>':'')+'</td></tr>'+
         (S.metaOpen[i]?'<tr class="metas"><td></td><td colspan="9"><div class="fields" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))">'+[['minima','Mínima'],['mediana','Mediana'],['maxima','Máxima']].map(([m,lab])=>['valorFaturar','valorPagar'].map(fl=>'<label class="f">'+lab+' — '+(fl==='valorFaturar'?'a faturar':'a pagar')+' (R$)<input type="text" inputmode="decimal" autocomplete="off" id="mt'+i+m+fl+'" value="'+dec((it.metas&&it.metas[m]&&num(it.metas[m][fl]))||'')+'" placeholder="'+dec(num(it[fl])||'')+'" data-chg="itMeta" data-i="'+i+'" data-m="'+m+'" data-f="'+fl+'"'+dis+'></label>').join('')).join('')+'</div><p class="muted" style="margin:6px 0 0;font-size:.8rem">Valores por unidade usados quando o fechamento estiver na meta correspondente. Em branco = usa o valor padrão do item.</p></td></tr>':'');}).join(''):'<tr><td colspan="10" class="muted">Nenhum item. Adicione as especialidades e tipos do contrato.</td></tr>')+'</tbody></table></div></div>';
-  const itOpts=sel=>'<option value="">Escolha…</option>'+d.itens.map(it=>'<option value="'+it.id+'"'+(sel===it.id?' selected':'')+'>'+esc(it.especialidade+' — '+it.tipo)+'</option>').join('');
+  const itOpts=sel=>'<option value="">Escolha…</option>'+itensUniao(d).map(it=>'<option value="'+it.id+'"'+(sel===it.id?' selected':'')+'>'+esc(it.especialidade+' — '+it.tipo)+'</option>').join('');
   out+='<div class="card"><div class="row"><h2 class="grow">Vínculo com setores do Pega Plantão</h2></div><p class="muted">Define qual item do contrato recebe as horas de cada “Local | Setor” do relatório. É preenchido automaticamente na conferência.</p><div class="tbl"><table><thead><tr><th>Local | Setor</th><th>Item do contrato</th><th></th></tr></thead><tbody>'+
     (d.mapeamento.length?d.mapeamento.map((m,i)=>'<tr><td>'+esc(m.s)+'</td><td><select id="mpc'+i+'" data-chg="ctMap" data-i="'+i+'"'+dis+'>'+itOpts(m.item)+'<option value="__ignorar"'+(m.item==='__ignorar'?' selected':'')+'>Não faturar (ignorar)</option></select></td><td>'+(ed?'<button class="btn ghost sm" data-act="rmMap" data-i="'+i+'" aria-label="Remover vínculo">✕</button>':'')+'</td></tr>').join(''):'<tr><td colspan="3" class="muted">Sem vínculos ainda.</td></tr>')+'</tbody></table></div></div>';
   out+='<div class="card"><div class="row"><h2 class="grow">Valores diferenciados por médico</h2>'+(ed?'<button class="btn sm" data-act="addDif">Adicionar</button>':'')+'</div><p class="muted">Substitui o valor a pagar do item para o médico indicado.</p><div class="tbl"><table><thead><tr><th>CRM</th><th>Médico</th><th>Item</th><th class="n">Valor a pagar</th><th></th></tr></thead><tbody>'+
     (d.diferenciados.length?d.diferenciados.map((x,i)=>'<tr><td><input type="text" id="df'+i+'c" value="'+esc(x.crm)+'" data-chg="dif" data-i="'+i+'" data-f="crm"'+dis+' style="min-width:90px"></td><td><input type="text" id="df'+i+'n" value="'+esc(x.nome||'')+'" data-chg="dif" data-i="'+i+'" data-f="nome"'+dis+'></td><td><select id="df'+i+'i" data-chg="dif" data-i="'+i+'" data-f="item"'+dis+'>'+itOpts(x.item)+'</select></td><td class="n"><input type="text" inputmode="decimal" autocomplete="off" id="df'+i+'v" value="'+dec((x.valorPagar||0))+'" data-chg="dif" data-i="'+i+'" data-f="valorPagar"'+dis+'></td><td>'+(ed?'<button class="btn ghost sm" data-act="rmDif" data-i="'+i+'" aria-label="Remover">✕</button>':'')+'</td></tr>').join(''):'<tr><td colspan="5" class="muted">Nenhum valor diferenciado.</td></tr>')+'</tbody></table></div></div>';
   out+='<div class="card"><h2>Pedido de NF (PENF)</h2><div class="fields">'+fld('tomador','Tomador','w2')+fld('cnpj','CNPJ do tomador')+fld('endereco','Endereço','w2')+fld('municipio','Município')+fld('empenho','Empenho')+fld('parceiro','Parceiro (cód.)')+fld('codEmpresaFat','Empresas (cód. faturamento)')+fld('cidadeISS','Cidade ISS (cód.)')+fld('tipoOperacao','Tipo operação')+fld('produtoServico','Produto / serviço (cód.)')+
     fld('descricaoNF','Modelo da descrição dos serviços','wfull','ta')+'</div><p class="muted">Campos automáticos: {ESPECIALIDADES} {PERIODO} {COMPETENCIA} {QTD_TOTAL} {UNIDADE} {VALOR_UNITARIO} {VALOR_TOTAL} {ITENS} {CONTRATO}</p></div>';
+  const hist=(d.historico||[]).slice().reverse();
+  if(d.id) out+='<div class="card"><h2>Histórico de valores e tabelas</h2>'+(hist.length?'<div class="log">'+hist.slice(0,60).map(h=>'<div class="it"><div class="t">'+fDT(h.em)+'<br><b>'+esc(nomeDe(h.por))+'</b></div><div class="x"><b>'+esc(h.texto||'')+'</b>'+(h.retroativo?' <span class="tag warn">retroativo</span>':'')+(h.justificativa?'<br><span class="muted">Justificativa:</span> '+esc(h.justificativa):'')+((h.mudancas||[]).length?'<br><span class="muted" style="font-size:.82rem">'+h.mudancas.slice(0,8).map(m=>esc(m.item+' — '+m.campo+(m.texto?': '+m.texto:': '+brl(m.de)+' → '+brl(m.para)))).join('<br>')+(h.mudancas.length>8?'<br>e mais '+(h.mudancas.length-8):'')+'</span>':'')+'</div></div>').join('')+'</div>':'<p class="muted">Sem alterações registradas.</p>')+'</div>';
   out+='<div class="card"><h2>Impostos sobre o faturamento</h2><p class="muted" style="margin-top:0">Alíquotas (%) aplicadas sobre o faturamento bruto para chegar ao faturamento líquido no dashboard e no resumo do fechamento.</p><div class="fields">'+fld('impISS','ISS (%)','','number')+fld('impPIS','PIS (%)','','number')+fld('impCOFINS','COFINS (%)','','number')+fld('impCSLL','CSLL (%)','','number')+fld('impIR','IR (%)','','number')+'<div class="f"><span>Total</span><b style="font-size:1.05rem;color:var(--fg);padding-top:6px">'+fN(IMPOSTOS_FAT.reduce((s2,[n,k])=>s2+num(d[k]),0),2)+'%</b></div></div></div>';
   out+='<div class="card"><h2>Solicitação de NF aos médicos PJ</h2><p class="muted" style="margin-top:0">Usado no e-mail “Solicitar NF”. Razão social, CNPJ, endereço e município do tomador vêm do bloco acima.</p><div class="fields">'+fld('cep','CEP do tomador')+fld('localPrestacao','Local e município da prestação','w2')+fld('diaLimiteNF','Dia limite para envio da NF (mês seguinte)','','number')+fld('discriminacaoPJ','Discriminação dos serviços','wfull','ta')+'</div></div>';
   out+='<div class="card"><h2>Folha de pagamento / ERP</h2><div class="fields">'+fld('codEmpresaPagadora','Cód. empresa pagadora (padrão)')+
@@ -538,6 +552,24 @@ function viewAdmin(){
 /* ================= MODAIS ================= */
 function viewModal(){
   const m=S.modal;
+  if(m.type==='vigencia'){ const V=calcVigencia(m);
+    const T=tabelasDoContrato(m.ctBase).find(t=>t.id===m.tabelaId)||{};
+    return '<h2>A partir de quando os novos valores valem?</h2><p class="muted" style="margin:0">Tabela <b>'+esc(T.nome||'original')+'</b> (vigente desde '+(T.vigencia?compTxt(T.vigencia):'o início do contrato')+'). '+m.mudancas.length+' alteração(ões):</p>'+
+      '<div class="tbl" style="max-height:180px;overflow:auto"><table><tbody>'+m.mudancas.map(x=>'<tr><td style="white-space:normal">'+esc(x.item)+'</td><td>'+esc(x.campo)+'</td><td class="n">'+(x.texto?esc(x.texto):brl(x.de)+' → <b>'+brl(x.para)+'</b>')+'</td></tr>').join('')+'</tbody></table></div>'+
+      '<label class="f chk"><input type="radio" name="vgModo" id="vgNova" data-chg="vgCampo" data-f="modo" value="nova"'+(m.modo==='nova'?' checked':'')+'> Valem a partir de uma competência (cria nova tabela; as anteriores ficam com os valores atuais)</label>'+
+      (m.modo==='nova'?'<div class="fields" style="padding-left:26px"><label class="f">A partir da competência<input type="month" id="vgV" value="'+esc(m.V||'')+'" data-chg="vgCampo" data-f="V"></label><label class="f w2">Nome da nova tabela<input type="text" id="vgNome" value="'+esc(m.nome||'')+'" data-inp="vgCampo" data-f="nome"></label><label class="f">Tipo<select id="vgTipo" data-chg="vgCampo" data-f="tipo"><option value="reajuste"'+(m.tipo==='reajuste'?' selected':'')+'>Reajuste</option><option value="aditivo"'+(m.tipo==='aditivo'?' selected':'')+'>Aditivo</option></select></label></div>':'')+
+      '<label class="f chk"><input type="radio" name="vgModo" id="vgCorr" data-chg="vgCampo" data-f="modo" value="corrigir"'+(m.modo==='corrigir'?' checked':'')+'> Corrigir a própria tabela (vale desde '+(T.vigencia?compTxt(T.vigencia):'o início do contrato')+')</label>'+
+      (V.erro?'<div class="banner bad">'+esc(V.erro)+'</div>':'')+
+      (V.retro?'<div class="banner warn"><div><b>Alteração retroativa.</b> Afeta '+V.afetados.length+' fechamento(s) já existente(s): '+V.afetados.map(x=>esc(compTxt(x.competencia))+(lock(x)?' (aprovado — só muda se for reaberto)':' (será recalculado)')).join(', ')+'.</div></div><label class="f">Justificativa (obrigatória)<textarea id="vgJust" data-inp="vgCampo" data-f="just" style="min-height:70px" placeholder="Ex.: reajuste contratual aprovado em ata, retroativo a setembro">'+esc(m.just||'')+'</textarea></label>':
+        (V.afetados.length?'<p class="muted" style="margin:0">Fechamentos em andamento a partir dessa competência serão recalculados.</p>':''))+
+      '<div class="row"><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button><button class="btn pri" data-act="vgConfirmar"'+(V.erro?' disabled':'')+'>Confirmar e salvar</button></div>';
+  }
+  if(m.type==='novaTabela'){ const retro=!!m.V&&(S.fechs||[]).some(x=>x.contratoId===S.draft.id&&x.competencia>=m.V&&(x.competencia<mesAtual()||lock(x)));
+    return '<h2>'+(m.tipo==='aditivo'?'Novo aditivo':'Novo reajuste')+'</h2><p class="muted" style="margin:0">Cria uma nova tabela a partir da tabela <b>'+esc(m.base)+'</b>. Depois altere os valores e salve o contrato.</p>'+
+      '<div class="fields"><label class="f w2">Nome da tabela<input type="text" id="ntNome" value="'+esc(m.nome)+'" data-inp="ntCampo" data-f="nome"></label><label class="f">Vigente a partir da competência<input type="month" id="ntV" value="'+esc(m.V)+'" data-chg="ntCampo" data-f="V"></label></div>'+
+      (retro?'<div class="banner warn">Vigência retroativa: já há fechamentos a partir dessa competência.</div><label class="f">Justificativa (obrigatória)<textarea id="ntJust" data-inp="ntCampo" data-f="just" style="min-height:70px">'+esc(m.just||'')+'</textarea></label>':'')+
+      '<div class="row"><span class="grow"></span><button class="btn" data-act="modalClose">Cancelar</button><button class="btn pri" data-act="ntConfirmar">Criar tabela</button></div>';
+  }
   if(m.type==='novo'){
     const p=m.parsed;
     let out='<h2>Importar relatório do Pega Plantão</h2><p class="muted" style="margin:0">Use o relatório Financeiro (.xlsx). A quantidade apurada é a coluna “Duração (Tolerância)”.</p>'+
@@ -591,7 +623,7 @@ async function importarPara(ct,comp,parsed,nomeArq){
   const ex=fechById(id);
   // vínculos de setor: auto-sugestão para setores novos
   const mapa=(ct.mapeamento||[]).slice(); const conhecidos=new Set(mapa.map(m=>m.s)); let novos=0;
-  Object.keys(ag.setores).forEach(s=>{ if(!conhecidos.has(s)){ const sug=sugerirItem(s,ct.itens||[]); if(sug){ mapa.push({s,item:sug}); novos++; } } });
+  Object.keys(ag.setores).forEach(s=>{ if(!conhecidos.has(s)){ const sug=sugerirItem(s,itensUniao(ct)); if(sug){ mapa.push({s,item:sug}); novos++; } } });
   if(novos) await wr('contratos/'+ct.id,()=>S.db.doc('contratos/'+ct.id).update({mapeamento:mapa}));
   // plantões detalhados em blocos
   const tup=parsed.rows.map(r=>[r.k,r.data,r.tipo,setorKey(r),r4(r.plan),r4(r.real),r4(r.apur),r.sit,r.ini,r.fim]);
@@ -687,6 +719,60 @@ function wbFolha(F,ct,f){
 }
 
 /* ================= AÇÕES ================= */
+/* ---------- tabelas de valores: vigência, retroatividade e histórico ---------- */
+function mesAtual(){ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
+/** Situação da decisão no modal de vigência: vigência efetiva, se é retroativa e quais fechamentos atinge. */
+function calcVigencia(m){
+  const ts=tabelasDoContrato(m.ctBase); const T=ts.find(t=>t.id===m.tabelaId)||{};
+  let vig, erro='';
+  if(m.modo==='nova'){
+    vig=m.V||'';
+    if(!vig) erro='Informe a competência a partir da qual os valores valem.';
+    else if(T.vigencia&&vig<=T.vigencia) erro='A competência precisa ser posterior a '+compTxt(T.vigencia)+' (início da tabela atual). Para valer desde lá, escolha “Corrigir a própria tabela”.';
+    else if(ts.some(t=>t.id!==T.id&&t.vigencia===vig)) erro='Já existe uma tabela vigente a partir de '+compTxt(vig)+'. Edite essa tabela.';
+    else if(m.multi) erro='Mais de uma tabela foi alterada. Corrija as tabelas ou salve uma de cada vez.';
+  } else vig=T.vigencia||'';
+  // até onde a decisão vale: próxima tabela com vigência posterior
+  const prox=ts.filter(t=>t.vigencia&&t.vigencia>(vig||'')&&t.id!==T.id).map(t=>t.vigencia).sort()[0]||'9999-99';
+  const afetados=(S.fechs||[]).filter(x=>x.contratoId===m.ctBase.id&&x.competencia>=(vig||'')&&x.competencia<prox);
+  // retroativa = atinge fechamento de mês passado ou fechamento já aprovado
+  const retro=!erro&&afetados.some(x=>x.competencia<mesAtual()||lock(x));
+  return {vig,erro,afetados,retro};
+}
+function pedirVigencia(o){
+  const ts=tabelasDoContrato(o.ctBase); const T=ts.find(t=>t.id===o.tabelaId)||ts[0];
+  const mud=diffValores(T.itens,o.novosItens);
+  if(!mud.length){ if(o.semMudanca) o.semMudanca(); return; }
+  const ref=o.compRef||mesAtual();
+  const temAnteriores=(S.fechs||[]).some(x=>x.contratoId===o.ctBase.id&&x.competencia>=(T.vigencia||'')&&x.competencia<ref);
+  const modo=(!temAnteriores||(T.vigencia&&T.vigencia>=ref))?'corrigir':'nova';
+  S.modal={type:'vigencia',...o,tabelaId:T.id,mudancas:mud,modo,V:ref,nome:'Reajuste '+compTxt(ref),tipo:'reajuste',just:''};
+  render();
+}
+/** Aplica a decisão: cria nova tabela ou corrige a existente, registra histórico e avisa os fechamentos atingidos. */
+async function aplicarVigencia(){
+  const m=S.modal; const V=calcVigencia(m);
+  if(V.erro){ toast(V.erro,'bad'); return; }
+  if(V.retro&&(m.just||'').trim().length<10){ toast('Alteração retroativa: escreva a justificativa (mínimo 10 caracteres).','bad'); return; }
+  const base=JSON.parse(JSON.stringify(m.ctBase));
+  const tabs=JSON.parse(JSON.stringify(tabelasDoContrato(base)));
+  const T=tabs.find(t=>t.id===m.tabelaId);
+  let texto;
+  if(m.modo==='nova'){
+    const nova={id:uidGen('t'),nome:(m.nome||'').trim()||('Reajuste '+compTxt(V.vig)),tipo:m.tipo||'reajuste',vigencia:V.vig,itens:JSON.parse(JSON.stringify(m.novosItens)),criadoEm:nowISO(),criadoPor:S.uid};
+    tabs.push(nova); texto='Nova tabela “'+nova.nome+'” ('+(nova.tipo==='aditivo'?'aditivo':'reajuste')+') vigente a partir de '+compTxt(V.vig);
+    m.novaId=nova.id;
+  } else { T.itens=JSON.parse(JSON.stringify(m.novosItens)); texto='Correção da tabela “'+(T.nome||'original')+'” (vale desde '+(T.vigencia?compTxt(T.vigencia):'o início do contrato')+')'; }
+  const reg={em:nowISO(),por:S.uid,tipo:m.modo==='nova'?'nova_tabela':'correcao',texto,tabela:m.modo==='nova'?m.nome:T.nome,vigencia:V.vig,retroativo:!!V.retro,justificativa:(m.just||'').trim(),mudancas:m.mudancas.slice(0,60),origem:m.origem};
+  const doc={...base,...(m.extras||{}),tabelas:tabs,historico:[...(base.historico||[]),...(m.pendentes||[]),reg].slice(-300)};
+  doc.itens=tabelaVigente(doc,mesAtual()).itens;
+  const id=doc.id; delete doc.id; delete doc.tabSel; doc.atualizadoEm=nowISO(); doc.atualizadoPor=S.uid;
+  S.modal=null; render();
+  await wr('contratos/'+id,()=>S.db.doc('contratos/'+id).set(doc));
+  for(const x of V.afetados){ if(!lock(x)) updFech(x.id,{eventos:evento(x,'valor','Valores do contrato alterados: '+texto+(reg.retroativo?' — retroativo. Justificativa: '+reg.justificativa:''))}); }
+  toast('Valores salvos. '+texto+'.');
+  if(m.origem==='editor'){ S.draft=null; S.v='ct'; render(); }
+}
 /* ---------- e-mails aos médicos ---------- */
 function vinculoDe(ct,k){ const m=(S.medicos[ct.id]||{})[k]||{}; return String(m.vinculo||ct.vinculoPadrao||'SOCIO').toUpperCase(); }
 function botoesEmail(f,ct,k){
@@ -801,7 +887,7 @@ const ACT={
   aprovar(){ const f=fechById(S.fid); const ct=ctById(f.contratoId);
     confirmar('Aprovar e travar o fechamento?','O relatório fica travado e o resumo de faturamento e pagamento é emitido com os valores atuais. Depois disso, só quem tem permissão de reabrir pode alterar.','Aprovar e travar',()=>{
       const calc=calcular({...f,congelado:null},ct); const em=nowISO();
-      wr('congelados/'+f.id,()=>S.db.doc('congelados/'+f.id).set({calc,itens:ct.itens||[],meta:f.meta||'',impostos:aliquotasContrato(ct),em}));
+      wr('congelados/'+f.id,()=>S.db.doc('congelados/'+f.id).set({calc,itens:itensVigentes(ct,f.competencia),tabela:calc.tabela||null,meta:f.meta||'',impostos:aliquotasContrato(ct),em}));
       updFech(f.id,{status:'aprovado',aprovadoPor:S.uid,aprovadoEm:em,t:{...f.t,aprovado:em},eventos:evento(f,'aprov','Aprovado e travado. Faturamento '+brl(calc.totais.totFat)+' · Pagamento '+brl(calc.totais.totPag)+' · Margem '+brl(calc.totais.margem))});
       S.tab='resumo'; toast('Fechamento aprovado e travado.'); }); },
   devolver(){ const f=fechById(S.fid); const mot=(S.devolver||'').trim(); if(!mot){ toast('Escreva o motivo da devolução.','bad'); return; }
@@ -849,16 +935,48 @@ const ACT={
   baixarFolha(){ const f=fechById(S.fid); if(f.folha&&f.folha.geradaEm&&!f.folha.rows) return; const ct=ctById(f.contratoId); const F=folhaAtual(f,ct,calcular(f,ct)); salvarArquivo('Folha_Importacao_'+(ct.sigla||'')+'_'+f.competencia.replace('-','')+'.xlsx',wbFolha(F,ct,f)); },
   salvarObs(){ const f=fechById(S.fid); const tx=S.obsDraft[f.id]; if(tx==null) return; const o=f.obs||{}; const h=(o.historico||[]).slice(-199); const em=nowISO(); h.push({texto:tx,por:S.uid,em});
     updFech(f.id,{obs:{texto:tx,por:S.uid,em,historico:h},eventos:evento(f,'obs','Observação registrada')}).then(()=>{ delete S.obsDraft[f.id]; render(); }); toast('Observação salva.'); },
-  novoCt(){ S.draft=novoContrato(); S.v='ctEd'; render(); },
-  editCt(el){ S.draft=JSON.parse(JSON.stringify(ctById(el.dataset.id))); ['itens','diferenciados','mapeamento'].forEach(k=>S.draft[k]=S.draft[k]||[]); S.v='ctEd'; render(); },
+  novoCt(){ S.draft=novoContrato(); S.draft.tabSel='t_original'; S.draft.itens=S.draft.tabelas[0].itens; S.v='ctEd'; render(); },
+  novaTabela(el){ const d=S.draft; const tipo=el.dataset.tipo; const n=(d.tabelas||[]).filter(t=>t.tipo==='aditivo').length+1;
+    const base=(d.tabelas||[]).find(t=>t.id===d.tabSel)||tabelaVigente(d,mesAtual());
+    S.modal={type:'novaTabela',tipo,base:base.nome||'original',baseId:base.id,nome:tipo==='aditivo'?n+'º Termo aditivo':'Reajuste '+compTxt(mesAtual()),V:mesAtual(),just:''}; render(); },
+  ntConfirmar(){ const m=S.modal; const d=S.draft;
+    if(!m.V){ toast('Informe a competência de início.','bad'); return; }
+    if((d.tabelas||[]).some(t=>t.vigencia===m.V)){ toast('Já existe uma tabela vigente a partir de '+compTxt(m.V)+'.','bad'); return; }
+    const retro=(S.fechs||[]).some(x=>x.contratoId===d.id&&x.competencia>=m.V&&(x.competencia<mesAtual()||lock(x)));
+    if(retro&&(m.just||'').trim().length<10){ toast('Vigência retroativa: escreva a justificativa (mínimo 10 caracteres).','bad'); return; }
+    const base=(d.tabelas||[]).find(t=>t.id===m.baseId)||{itens:[]};
+    const nova={id:uidGen('t'),nome:(m.nome||'').trim()||'Nova tabela',tipo:m.tipo,vigencia:m.V,itens:JSON.parse(JSON.stringify(base.itens||[])),criadoEm:nowISO(),criadoPor:S.uid};
+    d.tabelas.push(nova); d.tabSel=nova.id; d.itens=nova.itens;
+    d._pend=[...(d._pend||[]),{em:nowISO(),por:S.uid,tipo:'nova_tabela',texto:'Nova tabela “'+nova.nome+'” ('+(m.tipo==='aditivo'?'aditivo':'reajuste')+') vigente a partir de '+compTxt(m.V)+', copiada de “'+(base.nome||'original')+'”',tabela:nova.nome,vigencia:m.V,retroativo:retro,justificativa:(m.just||'').trim(),mudancas:[]}];
+    S.modal=null; toast('Tabela criada. Altere os valores e clique em Salvar contrato.'); render(); },
+  vgConfirmar(){ aplicarVigencia().catch(e=>toast(errMsg(e),'bad')); },
+  editCt(el){ const c=ctById(el.dataset.id); S.draft=JSON.parse(JSON.stringify(c)); ['itens','diferenciados','mapeamento','historico'].forEach(k=>S.draft[k]=S.draft[k]||[]);
+    S.draft.tabelas=JSON.parse(JSON.stringify(tabelasDoContrato(c))); const tv=tabelaVigente(S.draft,mesAtual()); S.draft.tabSel=tv.id; S.draft.itens=tv.itens; S.v='ctEd'; render(); },
   addItem(){ S.draft.itens.push({id:uidGen('i'),especialidade:'',tipo:'',unidadePag:'hora',unidadeFat:'hora',qtdMes:0,valorFaturar:0,valorPagar:0,fontePag:'cadastro'}); render(); },
   rmItem(el){ S.draft.itens.splice(+el.dataset.i,1); render(); },
   addDif(){ S.draft.diferenciados.push({crm:'',nome:'',item:'',valorPagar:0}); render(); },
   rmDif(el){ S.draft.diferenciados.splice(+el.dataset.i,1); render(); },
   rmMap(el){ S.draft.mapeamento.splice(+el.dataset.i,1); render(); },
   async salvarCt(){ const d=S.draft; if(!d.sigla||!d.nome){ toast('Preencha a sigla do CR e o nome do contrato.','bad'); return; }
-    const id=d.id||safeKey(d.sigla+'_'+(d.numero||uidGen())).toUpperCase(); const body={...d}; delete body.id; body.atualizadoEm=nowISO(); body.atualizadoPor=S.uid;
-    await wr('contratos/'+id,()=>S.db.doc('contratos/'+id).set(body)); S.draft={...d,id}; toast('Contrato salvo.'); S.v='ct'; render(); },
+    const salvo=d.id&&ctById(d.id);
+    const montar=()=>{ const body=JSON.parse(JSON.stringify(d)); const pend=body._pend||[]; delete body._pend; delete body.tabSel; delete body.id;
+      body.historico=[...(body.historico||[]),...pend].slice(-300); body.itens=tabelaVigente(body,mesAtual()).itens; body.atualizadoEm=nowISO(); body.atualizadoPor=S.uid; return body; };
+    if(salvo){
+      // valores alterados em tabela já salva → pergunta a vigência
+      const antigas=tabelasDoContrato(salvo);
+      const mudadas=(d.tabelas||[]).filter(t=>{ const a=antigas.find(x=>x.id===t.id); return a&&diffValores(a.itens,t.itens).length; });
+      if(mudadas.length){
+        const T=mudadas.find(t=>t.id===d.tabSel)||mudadas[0]; const aT=antigas.find(x=>x.id===T.id);
+        // base = rascunho com a tabela T ainda nos valores salvos; as demais alterações do rascunho vão junto
+        const base=JSON.parse(JSON.stringify({...d,id:d.id})); base.tabelas=base.tabelas.map(t=>t.id===T.id?{...t,itens:JSON.parse(JSON.stringify(aT.itens))}:t);
+        const pend=base._pend||[]; delete base._pend; delete base.tabSel;
+        pedirVigencia({origem:'editor',ctBase:base,tabelaId:T.id,novosItens:T.itens,multi:mudadas.length>1,pendentes:pend});
+        return;
+      }
+    }
+    const id=d.id||safeKey(d.sigla+'_'+(d.numero||uidGen())).toUpperCase(); const body=montar();
+    if(!salvo) body.historico=[...(body.historico||[]),{em:nowISO(),por:S.uid,tipo:'criacao',texto:'Contrato criado com a tabela “'+((body.tabelas||[])[0]||{}).nome+'”',mudancas:[]}];
+    await wr('contratos/'+id,()=>S.db.doc('contratos/'+id).set(body)); S.draft=null; toast('Contrato salvo.'); S.v='ct'; render(); },
   async addUser(el){ const id=el.dataset.id; if(S.usuarios.some(u=>u.id===id)){ toast('Este usuário já está cadastrado.'); return; }
     await wr('usuarios/'+id,()=>S.db.doc('usuarios/'+id).set({perfil:'consulta',perms:{...PERFIS.consulta.perms},ativo:true,criadoEm:nowISO(),criadoPor:S.uid})); S.userHits=[]; const i=$('#uSearch'); if(i) i.value=''; render(); toast('Usuário incluído com perfil Consulta.'); },
   rmUser(el){ const id=el.dataset.id; confirmar('Remover este usuário?','Ele deixa de acessar as telas do sistema.','Remover',()=>wr('usuarios/'+id,()=>S.db.doc('usuarios/'+id).delete()),true); },
@@ -888,11 +1006,13 @@ const CHG={
   folhaP(el){ const f=fechById(S.fid); updFech(f.id,{folhaParams:{[el.dataset.f]:el.value}}); },
   folhaV(el){ const f=fechById(S.fid); const v=el.value.trim()===''?null:num(el.value); updFech(f.id,{folhaParams:{[el.dataset.f]:{[el.dataset.k]:v}}}); },
   itemValor(el){ const f=fechById(S.fid); const ct=ctById(f.contratoId); if(!ct) return; const v=num(el.value);
-    const itens=(ct.itens||[]).map(i=>i.id!==el.dataset.item? i : {...i,[el.dataset.f]:v,...(el.dataset.f==='valorPagar'&&v>0?{fontePag:'cadastro'}:{})});
-    const it=itens.find(i=>i.id===el.dataset.item)||{};
-    wr('contratos/'+ct.id,()=>S.db.doc('contratos/'+ct.id).update({itens,atualizadoEm:nowISO(),atualizadoPor:S.uid}));
-    updFech(f.id,{eventos:evento(f,'valor','Contrato '+(ct.sigla||'')+': '+(el.dataset.f==='valorPagar'?'valor a pagar':'valor a faturar')+' de '+it.especialidade+' · '+it.tipo+' definido em '+brl(v))});
-    toast('Valor gravado no contrato.'); },
+    const T=tabelaVigente(ct,f.competencia);
+    const novos=(T.itens||[]).map(i=>i.id!==el.dataset.item? i : {...i,[el.dataset.f]:v,...(el.dataset.f==='valorPagar'&&v>0?{fontePag:'cadastro'}:{})});
+    pedirVigencia({origem:'fech',ctBase:ct,tabelaId:T.id,novosItens:novos,fechId:f.id,compRef:f.competencia}); },
+  tabSel(el){ const d=S.draft; const t=(d.tabelas||[]).find(x=>x.id===el.value); if(!t) return; d.tabSel=t.id; d.itens=t.itens; S.metaOpen={}; render(); },
+  tabCampo(el){ const d=S.draft; const t=(d.tabelas||[]).find(x=>x.id===d.tabSel); if(!t) return; t[el.dataset.f]=el.value; render(); },
+  vgCampo(el){ if(!S.modal) return; S.modal[el.dataset.f]=el.value; render(); },
+  ntCampo(el){ if(!S.modal) return; S.modal[el.dataset.f]=el.value; render(); },
   ct(el){ const f=el.dataset.f; S.draft[f]= el.dataset.num? num(el.value) : el.value;
     if(f==='sigla'){ const c=((S.config&&S.config.centros)||[]).find(x=>normTxt(x.sigla)===normTxt(el.value)); const d=S.draft;
       if(c){ if(!d.centroResultado) d.centroResultado=String(c.codigo); if(!d.nome) d.nome=c.descricao; if(!d.numero&&c.contrato) d.numero=String(c.contrato); if(!d.ano&&c.ano) d.ano=String(c.ano).startsWith('/')?String(c.ano):'/'+c.ano; if(!d.empresa&&c.empresa){ d.empresa=c.empresa; const e=((S.config&&S.config.empresas)||[]).find(x=>normTxt(x.sigla)===normTxt(c.empresa)); if(e&&!d.codEmpresaPagadora) d.codEmpresaPagadora=e.cod; } } }
@@ -919,6 +1039,8 @@ let searchT;
 const INP={
   confQ(el){ S.conf.q=el.value; render(); },
   emField(el){ if(S.modal) S.modal[el.dataset.f]=el.value; },
+  vgCampo(el){ if(S.modal) S.modal[el.dataset.f]=el.value; },
+  ntCampo(el){ if(S.modal) S.modal[el.dataset.f]=el.value; },
   medQ(el){ S.medQ=el.value; render(); },
   devolver(el){ S.devolver=el.value; },
   obs(el){ S.obsDraft[S.fid]=el.value; const b=document.querySelector('[data-act="salvarObs"]'); if(b){ const f=fechById(S.fid); b.disabled= el.value===((f.obs&&f.obs.texto)||''); } },
