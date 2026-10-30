@@ -184,3 +184,112 @@ test('tabelas de valores: escolhe a vigente pela competência e calcula com ela'
   assert.equal(d.filter((x) => x.campo === 'item novo').length, 1);
   assert.equal(diffValores(orig, JSON.parse(JSON.stringify(orig))).length, 0);
 });
+
+test('vigência por data: a tabela vigente no fim do período vale para a competência inteira', async () => {
+  const { tabelaVigente, refFech, inicioFech, normVig } = await import('../src/core.js');
+  const ct = { ...ctPAP, tabelas: [
+    { id: 't0', nome: 'Original', vigencia: '2025-01', itens: ctPAP.itens },
+    { id: 't1', nome: 'Reajuste', vigencia: '2026-09-10', itens: ctPAP.itens.map((i) => ({ ...i, valorFaturar: 200 })) },
+  ] };
+  assert.equal(normVig('2026-09'), '2026-09-01');
+  assert.equal(tabelaVigente(ct, '2026-09-09').id, 't0');
+  assert.equal(tabelaVigente(ct, '2026-09-10').id, 't1');
+  assert.equal(tabelaVigente(ct, '2026-09').id, 't1'); // AAAA-MM = último dia do mês
+  const f = { competencia: '2026-09', periodo: '26/08/2026 a 25/09/2026', base: [{ k: '1', s: 'PAP | PACS', n: 1, na: 1, plan: 10, real: 10, apur: 10, vApur: 0 }], medicos: {} };
+  assert.equal(refFech(f), '2026-09-25'); assert.equal(inicioFech(f), '2026-08-26');
+  assert.equal(calcular(f, ct).totais.totFat, 2000);
+  assert.equal(refFech({ competencia: '2026-10' }), '2026-10-31');
+});
+
+test('dia de semana (DS) e fim de semana (FDS): classe do plantão e vínculo por item', async () => {
+  const { classeDia, sugerirItem } = await import('../src/core.js');
+  assert.equal(classeDia('Sábado', ''), 'FDS'); assert.equal(classeDia('segunda-feira', ''), 'DS');
+  assert.equal(classeDia('', '17/10/2026'), 'FDS'); assert.equal(classeDia('', '19/10/2026'), 'DS');
+  assert.equal(classeDia(null, 46313), 'FDS'); // 18/10/2026 (domingo) como número do Excel
+  const rows = [
+    { k: '1', nome: 'A', crm: '1', local: 'PAP', setor: 'PACS', plan: 12, real: 12, apur: 12, totApur: 0, vh: 0, c: 'DS' },
+    { k: '1', nome: 'A', crm: '1', local: 'PAP', setor: 'PACS', plan: 12, real: 11, apur: 12, totApur: 0, vh: 0, c: 'FDS' },
+  ];
+  const ag = agregar(rows);
+  assert.equal(ag.base.length, 2); assert.deepEqual(ag.classes['PAP | PACS'].sort(), ['DS', 'FDS']);
+  const itens = [
+    { id: 'ds', especialidade: 'Pediatria', tipo: 'PACS', unidadePag: 'hora', unidadeFat: 'hora', valorFaturar: 100, valorPagar: 80, ds: true, fds: false },
+    { id: 'fds', especialidade: 'Pediatria', tipo: 'PACS FDS', unidadePag: 'hora', unidadeFat: 'hora', valorFaturar: 150, valorPagar: 120, ds: false, fds: true },
+  ];
+  assert.equal(sugerirItem('PAP | PACS', itens, 'DS'), 'ds');
+  const ct = { itens, mapeamento: [{ s: 'PAP | PACS', item: 'ds' }] };
+  const f = { base: ag.base, medicos: ag.medicos };
+  let c = calcular(f, ct);
+  assert.equal(c.totais.totFat, 1200); assert.deepEqual(c.naoMapeados, [{ s: 'PAP | PACS#FDS', n: 1 }]);
+  c = calcular(f, { ...ct, mapeamento: [...ct.mapeamento, { s: 'PAP | PACS#FDS', item: 'fds' }] });
+  assert.equal(c.totais.totFat, 1200 + 1800); assert.equal(c.naoMapeados.length, 0);
+});
+
+test('base da escala: pagamento pela realizada, faturamento pela planejada ou valor fixo mensal', () => {
+  const tab = (o) => ({ ...ctPAP, tabelas: [{ id: 't', nome: 'T', vigencia: '', itens: ctPAP.itens, ...o }] });
+  const f = { base: [
+    { k: '1', s: 'PAP | PACS', n: 2, na: 2, nr: 2, plan: 24, real: 20, apur: 22, vApur: 0 },
+    { k: '2', s: 'PAP | PACS', n: 1, na: 1, nr: 1, plan: 12, real: 12, apur: 12, vApur: 0 },
+  ], medicos: {} };
+  let c = calcular(f, tab({ basePag: 'realizada', baseFat: 'planejada' }));
+  assert.equal(c.totais.qPag, 32); assert.equal(c.totais.qFat, 36);
+  c = calcular(f, tab({ baseFat: 'fixo', valorFixoMensal: 10000 }));
+  assert.equal(c.totais.totFat, 10000);
+  assert.deepEqual(c.linhas.map((l) => l.totFat), [6470.59, 3529.41]);
+  assert.equal(c.tabela.baseFat, 'fixo');
+});
+
+test('impostos por empresa de faturamento e folha por empresa pagadora do item', async () => {
+  const { fiscalContrato, impostosCalc, aliqPara } = await import('../src/core.js');
+  const ct = { ...ctPAP, empresa: 'ATENA',
+    empresasFat: [{ sigla: 'ATENA', impISS: 5 }, { sigla: 'DOC', impISS: 2, impPIS: 0.65 }],
+    itens: [{ ...ctPAP.itens[0] }, { ...ctPAP.itens[1], empresaFat: 'DOC', empresaPag: 'DOC' }],
+    vinculosFolha: ['SOCIO', 'PJ'] };
+  const f = { base: [
+    { k: '1', s: 'PAP | PACS', n: 1, na: 1, plan: 10, real: 10, apur: 10, vApur: 0 },
+    { k: '1', s: 'PAP | HPS', n: 1, na: 1, plan: 10, real: 10, apur: 10, vApur: 0 },
+  ], medicos: { 1: { nome: 'A', crm: '1' } } };
+  const c = calcular(f, ct);
+  assert.deepEqual(c.porItem.map((p) => p.empresaFat), ['ATENA', 'DOC']);
+  const fis = fiscalContrato(ct);
+  const I = impostosCalc(c, fis);
+  assert.equal(I.total, r(1893.8 * 0.05 + 1893.8 * 0.0265));
+  assert.equal(I.porEmpresa.length, 2);
+  assert.equal(aliqPara({ impISS: 3 }, 'X').impISS, 3); // formato antigo
+  const F = calcFolha(c, ct, { 1: { vinculo: 'SOCIO', cpfConta: '1' } }, { pn: { '1@doc': 100 } }, { empresas: [{ sigla: 'ATENA', cod: 1 }, { sigla: 'DOC', cod: 2 }] });
+  assert.equal(F.rows.length, 2);
+  assert.deepEqual(F.rows.map((x) => [x.id, x.codEmpresa]), [['1@atena', 1], ['1@doc', 2]]);
+  assert.equal(F.rows[1].pn, 100);
+  assert.ok(!F.rows[0].alertas.some((a) => /duplicado/.test(a.t)));
+  // RPA não está nos vínculos da folha deste contrato → fica fora da planilha do ERP
+  const F2 = calcFolha(c, ct, { 1: { vinculo: 'RPA', cpfConta: '1' } }, {}, {});
+  assert.equal(F2.rows.length, 0); assert.equal(F2.fora.rows.length, 2);
+});
+function r(n) { return Math.round(n * 100) / 100; }
+
+test('folha: só Sócio, PJ e RPA; segundo vínculo por item; inclusão, alteração e exclusão manuais', () => {
+  const ct = { ...ctPAP, empresa: 'ATENA', vinculosFolha: undefined };
+  const f = { base: [
+    { k: '1', s: 'PAP | PACS', n: 1, na: 1, plan: 10, real: 10, apur: 10, vApur: 0 },
+    { k: '1', s: 'PAP | HPS', n: 1, na: 1, plan: 10, real: 10, apur: 10, vApur: 0 },
+    { k: '2', s: 'PAP | PACS', n: 1, na: 1, plan: 12, real: 12, apur: 12, vApur: 0 },
+  ], medicos: { 1: { nome: 'A', crm: '1' }, 2: { nome: 'B', crm: '2' } } };
+  const c = calcular(f, ct);
+  const reg = { 1: { vinculo: 'SOCIO', cpfConta: '111', vinculo2: { tipo: 'PJ', itens: ['hps'], cpfConta: '999', empresaPagadora: 'DOC' } }, 2: { vinculo: 'CONCURSADO', cpfConta: '222' } };
+  let F = calcFolha(c, ct, reg, {}, {});
+  assert.deepEqual(F.rows.map((r) => [r.nome, r.vinculo, r.empresa, r.cpfConta]), [['A', 'SOCIO', 'ATENA', '111'], ['A', 'PJ', 'DOC', '999']]);
+  assert.deepEqual(F.fora.rows.map((r) => [r.nome, r.vinculo]), [['B', 'CONCURSADO']]);
+  const idPJ = F.rows[1].id;
+  F = calcFolha(c, ct, reg, { manual: {
+    add: { m1: { nome: 'C', crm: '3', vinculo: 'RPA', total: 500, horas: 4, cpfConta: '333', just: 'cobertura' } },
+    edit: { [idPJ]: { total: 1000, just: 'acordo' } },
+    del: { 1: undefined },
+  } }, {});
+  assert.equal(F.rows.length, 3);
+  assert.equal(F.rows.find((r) => r.manual).total, 500);
+  assert.equal(F.rows.find((r) => r.id === idPJ).total, 1000);
+  assert.equal(F.ajuste, r(500 + 1000 - 1650));
+  const idS = F.rows.find((r) => r.vinculo === 'SOCIO').id;
+  F = calcFolha(c, ct, reg, { manual: { del: { [idS]: { just: 'pago em outro contrato' } } } }, {});
+  assert.equal(F.rows.length, 1); assert.equal(F.removidas.length, 1); assert.equal(F.ajuste, -1666.67);
+});

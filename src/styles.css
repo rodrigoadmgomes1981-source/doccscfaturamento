@@ -84,12 +84,23 @@ input[readonly],input:disabled,select:disabled,textarea:disabled{background:var(
 .fields{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(min(100%,200px),1fr))}
 .fields .w2{grid-column:span 2} .fields .wfull{grid-column:1/-1}
 @media (max-width:560px){.fields .w2{grid-column:1/-1}}
-.tbl{overflow-x:auto;border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
+.tbl{overflow:auto;max-height:calc(100vh - 150px);max-height:calc(100dvh - 150px);border:1px solid var(--line);border-radius:var(--r);background:var(--surface)}
 table{border-collapse:collapse;width:100%;font-size:.86rem}
 th{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;text-align:left;background:var(--sunken);position:sticky;top:0;z-index:2;box-shadow:inset 0 -1px 0 var(--line)}
 /* tabelas do fechamento: rolam dentro da caixa, com cabeçalho e total fixos */
 .tbl.fix{max-height:calc(100vh - 150px);max-height:calc(100dvh - 150px);overflow:auto}
-.tbl.fix tfoot td{position:sticky;bottom:0;z-index:1;box-shadow:inset 0 1px 0 var(--line)}
+.tbl tfoot td{position:sticky;bottom:0;z-index:1;box-shadow:inset 0 1px 0 var(--line)}
+/* coluna do médico congelada (mc1: 1ª coluna; mc2: seleção + médico) */
+.tbl.mc1 tbody td:first-child,.tbl.mc2 tbody td:nth-child(-n+2){position:sticky;left:0;z-index:1;background:var(--surface)}
+.tbl.mc1 thead th:first-child,.tbl.mc2 thead th:nth-child(-n+2){position:sticky;left:0;z-index:4}
+.tbl.mc1 tfoot td:first-child,.tbl.mc2 tfoot td:first-child{position:sticky;left:0;z-index:3}
+.tbl.mc1 tbody td:first-child,.tbl.mc2 tbody td:nth-child(2){box-shadow:inset -1px 0 0 var(--line)}
+.tbl.mc2 :is(th,td).sel{width:38px;min-width:38px;max-width:38px;text-align:center}
+.tbl.mc2 tbody td:nth-child(2),.tbl.mc2 thead th:nth-child(2){left:38px}
+.tbl.mc2 tbody tr.sub td:nth-child(2){position:static;box-shadow:none}
+.tbl.mc1 tr.adj td:first-child{box-shadow:inset 3px 0 0 var(--warn),inset -1px 0 0 var(--line)}
+.row.bulk{background:var(--sunken);border:1px solid var(--line);border-radius:var(--r);padding:8px 12px}
+.chk-grid{display:flex;flex-wrap:wrap;gap:8px 18px;padding-top:4px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .btn.del{color:var(--bad);padding:4px 7px}
 .btn.mail{color:var(--info);padding:4px 7px;font-size:.78rem;font-weight:700}
@@ -185,3 +196,7 @@ tr.adj td:first-child{box-shadow:inset 3px 0 0 var(--warn)}
 .login-card p{margin:6px 0 0}
 .login-links{justify-content:center;gap:4px}
 code{font-family:var(--f-mono);font-size:.86em;background:var(--sunken);padding:1px 5px;border-radius:4px}
+.chk-in{display:inline-flex;align-items:center;gap:5px;font-size:.84rem;white-space:nowrap;color:var(--fg)}
+.chk-in input{width:auto;min-width:0}
+th.c,td.c{text-align:center}
+td.c input[type=checkbox]{width:auto;min-width:0}

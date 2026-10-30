@@ -160,9 +160,17 @@ Os arquivos são JSON legíveis: `db/contratos/*.json`, `db/fechamentos/*.json`�
 
 | Item | Regra |
 |---|---|
-| Quantidade base | Itens por **hora** usam as horas apuradas (tolerância). Itens por **plantão** usam o nº de plantões com horas apuradas. **Consulta/procedimento** são informados na conferência. |
-| Pagamento | Qtd a pagar × valor a pagar do item. Se houver valor diferenciado para o médico, ele prevalece. Com a fonte "Pega Plantão", usa o *Total (Tolerância)*. |
-| Faturamento | Qtd a faturar × valor a faturar do item. |
+| Base da escala | Definida em cada tabela de valores. **Pagamento**: planejada, realizada ou apurada. **Faturamento**: planejada, realizada, apurada ou **valor fixo mensal**. Itens por hora usam as horas da base escolhida; itens por plantão contam os plantões (todos, realizados ou apurados). **Consulta/procedimento** são informados na conferência. |
+| Pagamento | Qtd a pagar × valor a pagar do item. Se houver valor diferenciado para o médico, ele prevalece. Com a fonte "Pega Plantão" e base apurada, usa o *Total (Tolerância)*. |
+| Faturamento | Qtd a faturar × valor a faturar do item. No valor fixo mensal, o valor é rateado entre as linhas pela quantidade apurada. |
+| DS / FDS | Cada item vale para dia de semana (seg–sex), fim de semana (sáb–dom) ou ambos, pelo dia em que o plantão começa (coluna *Dia da Semana*). Feriados contam pelo dia da semana. Plantões de fim de semana sem item são vinculados como `Setor#FDS`. |
+| Vigência das tabelas | Data (dd/mm/aaaa). O fechamento usa a tabela vigente no último dia do período do relatório; a competência inteira usa essa tabela. |
+| Empresas de faturamento | Cada empresa tem código, alíquotas (ISS, PIS, COFINS, CSLL, IR) e vínculos (Sócio, PJ, CLT). Cada item indica sua empresa; há um pedido de NF por empresa e os impostos são calculados por empresa. |
+| Empresa pagadora | Item do contrato > cadastro do médico > contrato. Médico pago por duas empresas tem uma linha por empresa na folha (taxa de sócio uma vez só). |
+| Base médica | Interna, por contrato (Médicos: incluir, editar, excluir ou importar a planilha). A importação do Pega Plantão não cadastra nem altera médicos; plantões de CRMs fora da base ficam de fora do fechamento e são listados na conferência. |
+| Vínculos | Sócio, RPA, PJ, Concursado e Cooperado. Um médico pode ter um 2º vínculo, que vale para as especialidades/tipos marcadas nele. |
+| Folha do ERP | Só Sócio, PJ e RPA. Os demais vínculos aparecem em “Fora da folha”. Incluir, alterar ou excluir médico na folha exige justificativa e fica no log. |
+| Glosa | Perguntada no pedido de NF (médico, CR, local/tipo, especialidade, horas, valor e se o médico foi pago). O valor é descontado do pedido de NF e aparece no dashboard em “Glosas por CR”. |
 | Margem operacional | Faturamento − pagamento. |
 | Metas | Cada item do contrato pode ter valores a faturar e a pagar para as metas mínima, mediana e máxima. A meta escolhida na conferência define os valores usados; meta sem valor usa o valor padrão do item. |
 | Retenções NF PJ | Médico PJ não optante do Simples: PIS 0,65%, COFINS 3%, CSLL 1% e IR 1,5% sobre o bruto (editáveis em Administração), descontados na folha e mostrados na solicitação de NF. |
@@ -171,6 +179,7 @@ Os arquivos são JSON legíveis: `db/contratos/*.json`, `db/fechamentos/*.json`�
 | Cód. reduzido | Sigla do CR + MM + AA (ex.: PAP0726). |
 | Vencimento | Último dia do mês seguinte à competência (editável). |
 | Naturezas | Honorários 120101 · PJ 120102 · RPA 120103 · Pró-Labore 120104 (editáveis). |
+| Perfis | Administrador, Faturamento, Aprovador, Folha/Financeiro, **Fiscal** (impostos e dados do PENF do contrato), **Departamento Pessoal** (aprova pró-labore) e Consulta. |
 | Saldo remanescente | Valor global do contrato − faturamento aprovado acumulado. |
 | Tempo de fechamento | Da importação até o último entre *Emitir pedido de NF* e *Gerar folha*. |
 
