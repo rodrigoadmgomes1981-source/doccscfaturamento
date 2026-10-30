@@ -200,3 +200,6 @@ code{font-family:var(--f-mono);font-size:.86em;background:var(--sunken);padding:
 .chk-in input{width:auto;min-width:0}
 th.c,td.c{text-align:center}
 td.c input[type=checkbox]{width:auto;min-width:0}
+.perm-grupos{display:grid;gap:10px}
+.perm-g{border:1px solid var(--line);border-radius:var(--r);padding:8px 12px 10px;margin:0}
+.perm-g legend{padding:0 6px}

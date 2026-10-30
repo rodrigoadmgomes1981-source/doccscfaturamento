@@ -179,7 +179,7 @@ Os arquivos são JSON legíveis: `db/contratos/*.json`, `db/fechamentos/*.json`�
 | Cód. reduzido | Sigla do CR + MM + AA (ex.: PAP0726). |
 | Vencimento | Último dia do mês seguinte à competência (editável). |
 | Naturezas | Honorários 120101 · PJ 120102 · RPA 120103 · Pró-Labore 120104 (editáveis). |
-| Perfis | Administrador, Faturamento, Aprovador, Folha/Financeiro, **Fiscal** (impostos e dados do PENF do contrato), **Departamento Pessoal** (aprova pró-labore) e Consulta. |
+| Perfis e permissões | Perfis prontos (Administrador, Faturamento, Aprovador, Folha/Financeiro, Fiscal, Departamento Pessoal, Consulta) e permissões por funcionalidade, em caixas de marcação agrupadas por módulo em Administração. |
 | Saldo remanescente | Valor global do contrato − faturamento aprovado acumulado. |
 | Tempo de fechamento | Da importação até o último entre *Emitir pedido de NF* e *Gerar folha*. |
 
