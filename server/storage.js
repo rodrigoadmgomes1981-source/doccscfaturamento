@@ -26,6 +26,11 @@ function checkKey(k) {
 }
 
 /* ------------------------- Vercel Blob ------------------------- */
+function erroProibido(e) {
+  const err = new Error('O Vercel Blob recusou a leitura dos dados (403). A causa mais comum é o limite mensal de leituras do plano Hobby ter sido atingido; também acontece se o Blob store foi desconectado do projeto. Detalhe: ' + ((e && e.message) || e));
+  err.code = 'blob_forbidden';
+  return err;
+}
 export function blobStorage(sdk) {
   const opts = { access: 'private' };
   const isPrecondition = (e) => e && (e.name === 'BlobPreconditionFailedError' || e instanceof sdk.BlobPreconditionFailedError);
@@ -42,19 +47,26 @@ export function blobStorage(sdk) {
       let etag = null;
       if (forUpdate) {
         try { const h = await sdk.head(key, { ...opts }); etag = h && h.etag; }
-        catch (e) { if (naoExiste(e)) return null; throw e; }
+        catch (e) { if (naoExiste(e)) return null; throw /\b403\b|forbidden/i.test(String(e && e.message)) ? erroProibido(e) : e; }
         if (!etag) return null;
       }
       let r;
+      const proibido = (e) => /\b403\b|forbidden|access denied/i.test(String(e && e.message));
       try { r = await sdk.get(key, { ...opts, useCache: forUpdate ? false : !fresh }); }
-      catch (e) { if (naoExiste(e)) return null; throw e; }
+      catch (e) {
+        if (naoExiste(e)) return null;
+        // leitura sem cache recusada (ex.: limite de leituras do plano atingido): tenta pelo cache, que não conta no limite
+        if (proibido(e) && (forUpdate || fresh)) { try { r = await sdk.get(key, { ...opts, useCache: true }); } catch (e2) { if (naoExiste(e2)) return null; throw erroProibido(e2); } }
+        else throw proibido(e) ? erroProibido(e) : e;
+      }
       if (!r || r.statusCode !== 200 || !r.stream) return null;
       const text = await new Response(r.stream).text();
       return { data: JSON.parse(text), etag: forUpdate ? etag : r.blob.etag };
     },
     async put(key, data, { ifMatch, onlyIfAbsent } = {}) {
       checkKey(key);
-      const o = { ...opts, contentType: 'application/json', addRandomSuffix: false, allowOverwrite: !onlyIfAbsent, cacheControlMaxAge: 60 };
+      // cache padrão da Vercel (longo): a Vercel limpa o cache quando o arquivo é regravado
+      const o = { ...opts, contentType: 'application/json', addRandomSuffix: false, allowOverwrite: !onlyIfAbsent };
       if (ifMatch) o.ifMatch = ifMatch;
       try {
         const r = await sdk.put(key, JSON.stringify(data), o);

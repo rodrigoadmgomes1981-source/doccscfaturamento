@@ -100,9 +100,9 @@ async function start() {
     if (me.trocarSenha) return tela('trocar');
     iniciar();
   } catch (e) {
-    app.innerHTML = `<div class="login"><div class="login-card"><div class="eyebrow">Faturamento Médico</div><h1>${e.code === 'no_storage' ? 'Armazenamento não conectado' : 'Servidor indisponível'}</h1>
+    app.innerHTML = `<div class="login"><div class="login-card"><div class="eyebrow">Faturamento Médico</div><h1>${e.code === 'no_storage' ? 'Armazenamento não conectado' : e.code === 'blob_forbidden' ? 'Leitura dos dados bloqueada pela Vercel' : 'Servidor indisponível'}</h1>
       <p>${esc(e.message)}</p>
-      ${e.code === 'no_storage' ? '<ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"><li>Na Vercel, abra o projeto › <b>Storage</b> › <b>Create</b> › <b>Blob</b>.</li><li>Escolha o acesso <b>Private</b> e conecte ao projeto (todos os ambientes).</li><li>Em <b>Deployments</b>, clique em <b>⋯</b> › <b>Redeploy</b>.</li></ol>' : '<button class="btn" onclick="location.reload()">Tentar de novo</button>'}
+      ${e.code === 'blob_forbidden' ? '<ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"><li>Na Vercel, abra <b>Usage</b> (ou o e-mail de aviso da Vercel) e veja se o limite do <b>Blob</b> foi atingido.</li><li>Se foi: passe a conta para o plano <b>Pro</b> (Settings › Billing). O bloqueio é retirado e os dados continuam lá. No plano Hobby a leitura só volta após 30 dias.</li><li>Se não foi: em <b>Storage</b>, confira se o Blob (Private) está conectado ao projeto e faça <b>Redeploy</b>.</li></ol><button class="btn" onclick="location.reload()">Tentar de novo</button>' : e.code === 'no_storage' ? '<ol style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px"><li>Na Vercel, abra o projeto › <b>Storage</b> › <b>Create</b> › <b>Blob</b>.</li><li>Escolha o acesso <b>Private</b> e conecte ao projeto (todos os ambientes).</li><li>Em <b>Deployments</b>, clique em <b>⋯</b> › <b>Redeploy</b>.</li></ol>' : '<button class="btn" onclick="location.reload()">Tentar de novo</button>'}
     </div></div>`;
   }
 }

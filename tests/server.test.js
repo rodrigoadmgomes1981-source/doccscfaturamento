@@ -218,3 +218,18 @@ test('e-mail pelo Microsoft Graph: token, envio e mensagens de erro', async () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('Blob com leitura sem cache bloqueada (403): lê pelo cache; tudo bloqueado → mensagem clara', async () => {
+  const sdk = fakeBlobSdk(); const getOrig = sdk.get; let bloqueiaTudo = false; const usos = [];
+  sdk.get = async (k, o) => { usos.push(o.useCache); if (bloqueiaTudo || o.useCache === false) throw new Error('Vercel Blob: Failed to fetch blob: 403 Forbidden'); return getOrig(k, o); };
+  const st = blobStorage(sdk);
+  await st.put('db/contratos/A.json', { x: 1 });
+  assert.deepEqual((await st.get('db/contratos/A.json')).data, { x: 1 });
+  assert.deepEqual(usos, [false, true]);
+  bloqueiaTudo = true;
+  await assert.rejects(st.get('db/contratos/A.json'), (e) => e.code === 'blob_forbidden' && /limite mensal de leituras/.test(e.message));
+  _setStorage(st);
+  const r = await handle(new Request('http://localhost:5173/api/auth', { method: 'POST', headers: { 'content-type': 'application/json', origin: 'http://localhost:5173', cookie: 'fm_sessao=x.y' }, body: JSON.stringify({ action: 'status' }) }), 'auth');
+  // sem usuários ainda: status lista (não lê); com sessão, a leitura do segredo falha → 503 explicativo
+  assert.ok([200, 503].includes(r.status));
+});

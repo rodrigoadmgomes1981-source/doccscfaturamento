@@ -77,11 +77,11 @@ let segredo = null;
 async function getSegredo(st) {
   if (segredo) return segredo;
   if (process.env.SESSION_SECRET) return (segredo = process.env.SESSION_SECRET);
-  const r = await st.get('sys/secret.json');
+  const r = await st.get('sys/secret.json', { fresh: false });
   if (r) return (segredo = r.data.v);
   const v = b64(randomBytes(32));
   try { await st.put('sys/secret.json', { v }, { onlyIfAbsent: true }); return (segredo = v); }
-  catch (e) { if (e instanceof Conflito) { const r2 = await st.get('sys/secret.json'); return (segredo = r2.data.v); } throw e; }
+  catch (e) { if (e instanceof Conflito) { const r2 = await st.get('sys/secret.json', { fresh: false }); return (segredo = r2.data.v); } throw e; }
 }
 async function assinar(st, payload) {
   const s = await getSegredo(st);
@@ -111,8 +111,8 @@ const cacheUser = new Map();   // id -> {u, at}
 const cacheAcesso = new Map(); // id -> {doc, at}
 async function lerUsuario(st, id, fresh) {
   const c = cacheUser.get(id);
-  if (!fresh && c && Date.now() - c.at < 15000) return c.u;
-  const r = await st.get(userKey(id));
+  if (!fresh && c && Date.now() - c.at < 60000) return c.u;
+  const r = await st.get(userKey(id), { fresh: !!fresh });
   const u = r ? r.data : null;
   cacheUser.set(id, { u, at: Date.now() });
   return u;
@@ -123,8 +123,8 @@ async function contexto(st, req) {
   const u = await lerUsuario(st, s.u);
   if (!u || u.versao !== s.v || u.desativado) return null;
   let ac = cacheAcesso.get(u.id);
-  if (!ac || Date.now() - ac.at > 15000) {
-    const r = await st.get(docKey('usuarios/' + u.id));
+  if (!ac || Date.now() - ac.at > 60000) {
+    const r = await st.get(docKey('usuarios/' + u.id), { fresh: false });
     ac = { doc: r ? r.data : null, at: Date.now() };
     cacheAcesso.set(u.id, ac);
   }
@@ -208,7 +208,7 @@ async function auth(req, st) {
   if (a === 'login') {
     const email = emailNorm(body.email);
     await new Promise((r) => setTimeout(r, 250 + Math.random() * 250)); // atrasa tentativas em massa
-    const idx = await st.get(emailKey(email));
+    const idx = await st.get(emailKey(email), { fresh: false });
     const u = idx && (await lerUsuario(st, idx.data.id, true));
     if (!u || u.desativado || !(await confere(body.senha || '', u))) throw new HttpErro(401, 'E-mail ou senha incorretos.', 'login');
     const token = await assinar(st, { u: u.id, v: u.versao, exp: Date.now() + SESSAO_DIAS * 864e5 });
@@ -373,7 +373,8 @@ async function db(req, st) {
   if (req.method === 'GET') {
     exigeLogin(ctx);
     const since = Number(new URL(req.url).searchParams.get('since') || 0);
-    const r = await st.get(JOURNAL);
+    // leitura pelo cache da Vercel (não conta no limite de leituras); a Vercel atualiza o cache quando o arquivo muda
+    const r = await st.get(JOURNAL, { fresh: false });
     const j = r ? r.data : { seq: 0, itens: [] };
     const primeiro = j.itens.length ? j.itens[0].s : j.seq + 1;
     if (since && since < primeiro - 1) return json({ seq: j.seq, reset: true });
@@ -406,7 +407,7 @@ async function db(req, st) {
     exigeLogin(ctx);
     const cols = (body.collections || []).slice(0, 20);
     cols.forEach((c) => checkPath(c, false));
-    const jr = await st.get(JOURNAL);
+    const jr = await st.get(JOURNAL, { fresh: false });
     const seq = jr ? jr.data.seq : 0;
     // alterados nos últimos 2 minutos: lê sem cache (o cache de leitura dura até 60 s)
     const recentes = new Set(jr ? jr.data.itens.filter((x) => Date.now() - new Date(x.at) < 120000).map((x) => x.p) : []);
@@ -486,6 +487,7 @@ export async function handle(req, rota) {
     if (e instanceof HttpErro) return json({ erro: e.message, code: e.code }, e.status);
     if (e instanceof Conflito) return json({ erro: 'Muitas alterações simultâneas. Tente de novo.', code: 'resource_exhausted' }, 409);
     if (e && e.code === 'no_storage') return json({ erro: e.message, code: 'no_storage' }, 503);
+    if (e && e.code === 'blob_forbidden') return json({ erro: e.message, code: 'blob_forbidden' }, 503);
     console.error(e);
     return json({ erro: 'Erro no servidor: ' + ((e && e.message) || e), code: 'unavailable' }, 500);
   }

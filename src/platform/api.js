@@ -22,7 +22,7 @@ export async function chamar(rota, corpo, metodo = 'POST') {
   return dados;
 }
 
-export function criarPlataforma({ intervalo = 8000 } = {}) {
+export function criarPlataforma({ intervalo = 45000 } = {}) {
   const cache = new Map();      // path -> data
   const docL = new Map();       // path -> Set<fn>
   const colL = new Map();       // collection -> Set<fn>
@@ -64,9 +64,11 @@ export function criarPlataforma({ intervalo = 8000 } = {}) {
   }
 
   /* --------- verificação de mudanças de outras pessoas --------- */
-  let timer = null, rodando = false;
+  let timer = null, rodando = false, ultimoUso = Date.now();
+  ['pointerdown', 'keydown', 'wheel'].forEach((ev) => window.addEventListener(ev, () => { const parado = Date.now() - ultimoUso > 600000; ultimoUso = Date.now(); if (parado) verificar(); }, { passive: true }));
   async function verificar() {
-    if (rodando || document.hidden) return;
+    // pausa quando a aba está escondida ou sem uso há mais de 10 minutos (economiza leituras)
+    if (rodando || document.hidden || Date.now() - ultimoUso > 600000) return;
     rodando = true;
     try {
       const r = await chamar('db?since=' + seq, null, 'GET');
